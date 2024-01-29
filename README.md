@@ -11,7 +11,7 @@ This is a follow-up work of [TILP: Differentiable Learning of Temporal Logical R
 
 ## Commands
 
-#### Dataset: wiki, YAGO
+#### Datasets: wiki, YAGO
 
 Random walk:
 ```sh
@@ -32,7 +32,7 @@ python src/main_rule_learning_interval_dataset.py --dataset YAGO --test --from_m
 python src/main_rule_learning_interval_dataset.py --dataset wiki --test --from_model_ckpt {$your_model_location}
 ```
 
-#### Dataset: icews14, icews05-15, gdelt100
+#### Datasets: icews14, icews05-15, gdelt100
 
 Random walk:
 ```sh
