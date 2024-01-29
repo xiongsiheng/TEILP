@@ -29,7 +29,7 @@ Rule application:
 ```sh
 python main_rule_learning_interval_dataset.py --dataset YAGO --test --from_model_ckpt {$your_model_location}
 
-python main_rule_learning_interval_dataset.py --dataset wiki --test --from_model_ckpt  {$your_model_location}
+python main_rule_learning_interval_dataset.py --dataset wiki --test --from_model_ckpt {$your_model_location}
 ```
 
 #### Dataset: icews14, icews05-15, gdelt100
