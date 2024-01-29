@@ -16,6 +16,7 @@ This is a follow-up work of [TILP: Differentiable Learning of Temporal Logical R
 #### Random walk:
 
 python main_random_walk_for_interval_datasets.py --dataset YAGO
+
 python main_random_walk_for_interval_datasets.py --dataset wiki
 
 #### Rule learning:
