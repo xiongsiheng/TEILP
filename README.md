@@ -11,19 +11,19 @@ This is a follow-up work of [TILP: Differentiable Learning of Temporal Logical R
 
 ## Commands
 
-# Dataset: wiki, YAGO
+### Dataset: wiki, YAGO
 
-### Random walk:
+#### Random walk:
 
 python main_random_walk_for_interval_datasets.py --dataset YAGO
 python main_random_walk_for_interval_datasets.py --dataset wiki
 
-### Rule learning:
+#### Rule learning:
 
 python main_rule_learning_interval_dataset.py --dataset YAGO --train
 python main_rule_learning_interval_dataset.py --dataset wiki --train
 
-### Rule application:
+#### Rule application:
 
 python main_rule_learning_interval_dataset.py --dataset YAGO --test --from_model_ckpt {$your_model_location}
 python main_rule_learning_interval_dataset.py --dataset wiki --test --from_model_ckpt  {$your_model_location}
@@ -31,19 +31,19 @@ python main_rule_learning_interval_dataset.py --dataset wiki --test --from_model
 
 ### Dataset: icews14, icews05-15, gdelt100
 
-### Random walk:
+#### Random walk:
 
 python main_random_walk_for_timestamp_datasets.py --dataset icews14
 python main_random_walk_for_timestamp_datasets.py --dataset icews05-15
 python main_random_walk_for_timestamp_datasets.py --dataset gdelt100
 
-### Rule learning:
+#### Rule learning:
 
 python main_rule_learning_timestamp_dataset.py --dataset icews14 --train
 python main_rule_learning_timestamp_dataset.py --dataset icews05-15 --train
 python main_rule_learning_timestamp_dataset.py --dataset gdelt100 --train
 
-### Rule application:
+#### Rule application:
 
 python main_rule_application_timestamp_dataset.py --dataset icews14
 python main_rule_application_timestamp_dataset.py --dataset icews05-15
