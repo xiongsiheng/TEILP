@@ -2,7 +2,7 @@
 This repository contains the code for the paper [TEILP: Time Prediction over Knowledge Graphs via Logical Reasoning](https://arxiv.org/pdf/2312.15816.pdf).
 
 <p align="center">
-  <img src='https://github.com/xiongsiheng/TEILP/blob/main/misc/task.png' width=400>
+  <img src='https://github.com/xiongsiheng/TEILP/blob/main/misc/task.png' width=600>
 </p>
 
 ## Introduction
