@@ -163,19 +163,19 @@ class Experiment():
 
                 if 'aeIOU' in self.metrics:
                     epoch_eval_aeIOU += obtain_aeIoU(preds, input_intervals[valid_sample_idx])
-                    print(obtain_aeIoU(preds, input_intervals[valid_sample_idx]))
+                    # print(obtain_aeIoU(preds, input_intervals[valid_sample_idx]))
 
                 if 'TAC' in self.metrics:
                     epoch_eval_TAC += obtain_TAC(preds, input_intervals[valid_sample_idx])
-                    print(obtain_TAC(preds, input_intervals[valid_sample_idx]))
+                    # print(obtain_TAC(preds, input_intervals[valid_sample_idx]))
 
                 if 'MAE' in self.metrics:
                     # preds = np.array(ref_time_ls)
                     epoch_eval_MAE += np.abs(np.array(preds).reshape(-1) - input_intervals[valid_sample_idx].reshape(-1)).tolist()
-                    print(np.abs(np.array(preds).reshape(-1) - input_intervals[valid_sample_idx].reshape(-1)).tolist())
-                    print(preds.reshape(-1), input_intervals[valid_sample_idx].reshape(-1))
-                    print(np.abs(np.array(ref_time_ls).reshape(-1) - input_intervals[valid_sample_idx].reshape(-1)).tolist())
-                    print(np.array(ref_time_ls).reshape(-1), input_intervals[valid_sample_idx].reshape(-1))
+                    # print(np.abs(np.array(preds).reshape(-1) - input_intervals[valid_sample_idx].reshape(-1)).tolist())
+                    # print(preds.reshape(-1), input_intervals[valid_sample_idx].reshape(-1))
+                    # print(np.abs(np.array(ref_time_ls).reshape(-1) - input_intervals[valid_sample_idx].reshape(-1)).tolist())
+                    # print(np.array(ref_time_ls).reshape(-1), input_intervals[valid_sample_idx].reshape(-1))
             # print('----------------------------')
 
         if mode == "Train":
