@@ -176,7 +176,7 @@ class Experiment():
                     print(preds.reshape(-1), input_intervals[valid_sample_idx].reshape(-1))
                     print(np.abs(np.array(ref_time_ls).reshape(-1) - input_intervals[valid_sample_idx].reshape(-1)).tolist())
                     print(np.array(ref_time_ls).reshape(-1), input_intervals[valid_sample_idx].reshape(-1))
-            print('----------------------------')
+            # print('----------------------------')
 
         if mode == "Train":
             if len(epoch_loss) == 0:
