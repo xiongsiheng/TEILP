@@ -276,7 +276,7 @@ class Experiment():
         if self.option.shift:
             file_suffix = '_time_shifting_'
 
-        dataset_index = ['wiki', 'YAGO', 'icews14', 'icews05-15', 'gdelt100'].index(dataset)
+        dataset_index = ['wiki', 'YAGO', 'icews14', 'icews05-15', 'gdelt100'].index(dataset_name)
         weight_exp_dist = [None, None, 0.01, 0.01, 0.05][dataset_index]
         scale_exp_dist = [None, None, 5, 10, 100][dataset_index]
         offset_exp_dist = [None, None, 0, 0, 0][dataset_index]
@@ -391,6 +391,7 @@ class Experiment():
                 te_probs_first_event_ts = []
                 te_probs_first_event_te = []
 
+                ref_time_ls = []
 
                 for (i, data_idx) in enumerate(idx_ls):
                     flag_valid = 0
@@ -510,7 +511,7 @@ class Experiment():
                 probs = [ts_probs_first_event_ts, ts_probs_first_event_te, ts_probs_last_event_ts, ts_probs_last_event_te,
                          te_probs_first_event_ts, te_probs_first_event_te, te_probs_last_event_ts, te_probs_last_event_te ]
 
-                return qq, query_rels, refNode_source, res_random_walk, probs, valid_sample_idx, input_intervals, input_samples
+                return qq, query_rels, refNode_source, res_random_walk, probs, valid_sample_idx, input_intervals, input_samples, ref_time_ls
             
             
             else:
