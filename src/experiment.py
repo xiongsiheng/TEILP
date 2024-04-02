@@ -36,6 +36,19 @@ class Experiment():
             self.metrics = ['MAE']
 
 
+        self.file_suffix = '_'
+        if self.option.shift:
+            self.file_suffix = '_time_shifting_'
+
+        dataset_index = ['wiki', 'YAGO', 'icews14', 'icews05-15', 'gdelt100'].index(self.data['dataset_name'])
+        self.weight_exp_dist = [None, None, 0.01, 0.01, 0.05][dataset_index]
+        self.scale_exp_dist = [None, None, 5, 10, 100][dataset_index]
+        self.offset_exp_dist = [None, None, 0, 0, 0][dataset_index]
+
+        self.edges = np.vstack((self.data['train_edges'], self.data['valid_edges'], self.data['test_edges']))
+
+
+
     def one_epoch(self, mode, total_idx=None):
         epoch_loss = []
         epoch_eval_aeIOU = []
@@ -79,7 +92,10 @@ class Experiment():
 
 
             if self.option.flag_acceleration:
-                qq, query_rels, refNode_source, res_random_walk, probs, valid_sample_idx, input_intervals, input_samples, ref_time_ls = self.create_TEKG_in_batch(batch_idx_ls, mode)
+                if self.data['dataset_name'] in ['icews14', 'icews05-15', 'gdelt']:
+                    qq, query_rels, refNode_source, res_random_walk, probs, valid_sample_idx, input_intervals, input_samples, ref_time_ls = self.create_TEKG_in_batch_timestamp_acc_ver(batch_idx_ls, mode)
+                else:
+                    qq, query_rels, refNode_source, res_random_walk, probs, valid_sample_idx, input_intervals, input_samples, ref_time_ls = self.create_TEKG_in_batch_interval_acc_ver(batch_idx_ls, mode)
             else:
                 qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, valid_ref_event_idx, input_intervals, input_samples = self.create_TEKG_in_batch(batch_idx_ls, mode)
 
@@ -252,436 +268,412 @@ class Experiment():
         self.log_file.close()
 
 
-    def create_TEKG_in_batch(self, idx_ls, mode):
-        dataset = self.data['dataset']
-        dataset_name = self.data['dataset_name']
 
-        num_samples_dist = self.data['num_samples_dist']
-        timestamp_range = self.data['timestamp_range']
+    def create_TEKG_in_batch_interval_acc_ver(self, idx_ls, mode):
+        output_probs_with_ref_edges = self.data['random_walk_res']
 
-        num_rel = self.data['num_rel']
-        num_entity = self.data['num_entity']
+        query_edges = []
+        input_intervals = []
+        for data_idx in idx_ls:
+            file = self.data['dataset_name'] + '_idx_' + str(data_idx) + '.json'
+            if not os.path.exists(path + file):
+                continue
+            # print(path + file)
+            with open(path + file, 'r') as f:
+                json_data = json.loads(f.read())
+            cur_query = json_data['query']
+            query_edges.append(cur_query)
+            input_intervals.append(cur_query[3:])
 
-        prob_type_for_training = self.option.prob_type_for_training
-        num_step = self.option.num_step-1
-        flag_ruleLen_split_ver = self.option.flag_ruleLen_split_ver
-        flag_acceleration = self.option.flag_acceleration
-        flag_time_shift = self.option.shift
-        num_rule = self.option.num_rule
+        qq = [query[1] for query in query_edges]
 
-        mdb = self.data['mdb']
-        connectivity = self.data['connectivity']
-        TEKG_nodes = self.data['TEKG_nodes']
-        file_suffix = '_'
-        if self.option.shift:
-            file_suffix = '_time_shifting_'
-
-        dataset_index = ['wiki', 'YAGO', 'icews14', 'icews05-15', 'gdelt100'].index(dataset_name)
-        weight_exp_dist = [None, None, 0.01, 0.01, 0.05][dataset_index]
-        scale_exp_dist = [None, None, 5, 10, 100][dataset_index]
-        offset_exp_dist = [None, None, 0, 0, 0][dataset_index]
-
-        if self.data['dataset_name'] in ['wiki', 'YAGO']:
-            path = self.data['path']
-            edges = np.vstack((self.data['train_edges'], self.data['valid_edges'], self.data['test_edges']))
-            pattern_ls = self.data['pattern_ls']
-            ts_stat_ls = self.data['ts_stat_ls']
-            te_stat_ls = self.data['te_stat_ls']
-            rm_ls = self.data['rm_ls']
-            output_probs_with_ref_edges = self.data['random_walk_res']
-        else:
-            edges = np.vstack((self.data['train_edges'], self.data['valid_edges'], self.data['test_edges']))
-            pattern_ls = self.data['pattern_ls']
-            stat_res = self.data['stat_res']
-            pattern_ls_fkt = None
-            stat_res_fkt = None
-            if self.option.shift:
-                pattern_ls_fkt = self.data['pattern_ls_fkt']
-                stat_res_fkt = self.data['stat_res_fkt']
-
-            if self.data['random_walk_res'] is not None:
-                input_edge_probs = self.data['random_walk_res']
-
-        # print(output_probs_with_ref_edges)
-        if flag_acceleration:
-            if self.data['dataset_name'] in ['wiki', 'YAGO']:
-                query_edges = []
-                input_intervals = []
-                for data_idx in idx_ls:
-                    file = dataset_name + '_idx_' + str(data_idx) + '.json'
-                    if not os.path.exists(path + file):
-                        continue
-                    # print(path + file)
-                    with open(path + file, 'r') as f:
-                        json_data = json.loads(f.read())
-                    cur_query = json_data['query']
-                    query_edges.append(cur_query)
-                    input_intervals.append(cur_query[3:])
-
-                qq = [query[1] for query in query_edges]
-
-                if output_probs_with_ref_edges is None:
-                    output = create_inputs_v3(edges=edges, path=path, 
-                                                 dataset=dataset_name, 
-                                                 idx_ls=idx_ls,
-                                                 pattern_ls=pattern_ls, 
-                                                 timestamp_range=timestamp_range, 
-                                                 num_rel=num_rel//2,
-                                                 ts_stat_ls=ts_stat_ls, 
-                                                 te_stat_ls=te_stat_ls,
-                                                 with_ref_end_time=True,
-                                                 targ_rel=None, num_samples_dist=num_samples_dist, 
-                                                 mode=mode, rm_ls=rm_ls,
-                                                 flag_output_probs_with_ref_edges=True,
-                                                 flag_acceleration=flag_acceleration,
-                                                 flag_time_shift=flag_time_shift)
+        if output_probs_with_ref_edges is None:
+            output = create_inputs_v3(edges=np.vstack((self.data['train_edges'], self.data['valid_edges'], self.data['test_edges'])), path=self.data['path'], 
+                                         dataset=self.data['dataset_name'], 
+                                         idx_ls=idx_ls,
+                                         pattern_ls=self.data['pattern_ls'], 
+                                         timestamp_range=self.data['timestamp_range'], 
+                                         num_rel=self.data['num_rel']//2,
+                                         ts_stat_ls=self.data['ts_stat_ls'], 
+                                         te_stat_ls=self.data['te_stat_ls'],
+                                         with_ref_end_time=True,
+                                         targ_rel=None, num_samples_dist=self.data['num_samples_dist'], 
+                                         mode=mode, rm_ls=self.data['rm_ls'],
+                                         flag_output_probs_with_ref_edges=True,
+                                         flag_acceleration=self.option.flag_acceleration,
+                                         flag_time_shift=self.option.shift)
 
 
-                if output_probs_with_ref_edges is None:
-                    output_probs_with_ref_edges = output[-1]
-                    if mode == 'Test':
-                        input_intervals_dict = output[-2]
-                else:
-                    if mode == 'Test':
-                        input_intervals_dict = {}
-                        for data_idx in idx_ls:
-                            data_idx -= num_samples_dist[1]
-                            cur_interval = edges[data_idx, 3:]
-                            input_intervals_dict[data_idx] = cur_interval
-
-                input_samples = []
-
-            else:
-                input_samples = edges[idx_ls]
-                input_intervals = edges[idx_ls, 3]
-                qq = edges[idx_ls, 1]
-
-                # print(input_samples, input_intervals, qq)
-                # sys.exit()
-
-            # print(input_intervals)
-
-            dim = 1
+        if output_probs_with_ref_edges is None:
+            output_probs_with_ref_edges = output[-1]
             if mode == 'Test':
-                dim = len(timestamp_range)
+                input_intervals_dict = output[-2]
+        else:
+            if mode == 'Test':
+                input_intervals_dict = {}
+                for data_idx in idx_ls:
+                    data_idx -= self.data['num_samples_dist'][1]
+                    cur_interval = edges[data_idx, 3:]
+                    input_intervals_dict[data_idx] = cur_interval
+
+        input_samples = []
+
+        dim = 1
+        if mode == 'Test':
+            dim = len(self.data['timestamp_range'])
+
+        if self.option.flag_ruleLen_split_ver:
+            print('Todo')
 
 
-            if self.data['dataset_name'] in ['wiki', 'YAGO']:
-                if flag_ruleLen_split_ver:
-                    # ruleLen_embedding = {}
-                    # for rel in pattern_ls:
-                    #     ruleLen = np.array([len(rule.split(' '))//2 for rule in pattern_ls[rel]])
-                    #     ruleLen = np.hstack((ruleLen, np.zeros((num_rule - len(pattern_ls[rel]),))))
-                    #     ruleLen_embedding[int(rel)] = ruleLen.copy()
-                    print('Todo')
+        valid_sample_idx = []
+        query_rels = []
+        refNode_source = []
+        res_random_walk = []
+
+        ts_probs_last_event_ts = []
+        ts_probs_last_event_te = []
+        ts_probs_first_event_ts = []
+        ts_probs_first_event_te = []
+
+        te_probs_last_event_ts = []
+        te_probs_last_event_te = []
+        te_probs_first_event_ts = []
+        te_probs_first_event_te = []
+
+        ref_time_ls = []
+
+        for (i, data_idx) in enumerate(idx_ls):
+            flag_valid = 0
+            if mode == 'Test':
+                if data_idx in input_intervals_dict:
+                    input_intervals[i] = input_intervals_dict[data_idx].tolist()
+
+            if data_idx not in output_probs_with_ref_edges:
+                continue
+
+            refNode_probs = {}
+            refNode_res_rw = {}
+
+            for idx_first_or_last in [0,1]:
+                event_type = ['first_event', 'last_event'][idx_first_or_last]
+
+                for edge in output_probs_with_ref_edges[data_idx][event_type]:
+                    if edge not in refNode_probs:
+                        refNode_probs[edge] = {0: {0: {0:[], 1:[]}, 1: {0:[], 1:[]}}, 1: {0: {0:[], 1:[]}, 1: {0:[], 1:[]}}}
+                        refNode_res_rw[edge] = []
+
+                    for idx_query_ts_or_te in [0,1]:
+                        for idx_ref_ts_or_te in [0,1]:
+                            x = output_probs_with_ref_edges[data_idx][event_type][edge][idx_query_ts_or_te][idx_ref_ts_or_te]
+
+                            if len(x) > 0:
+                                flag_valid = 1
+                            for x1 in x:
+                                refNode_probs[edge][idx_first_or_last][idx_query_ts_or_te][idx_ref_ts_or_te].append(x1[0])
+                                refNode_res_rw[edge].append(x1[1])
+
+                # print('------------------------')
 
 
-                valid_sample_idx = []
-                query_rels = []
-                refNode_source = []
-                res_random_walk = []
-
-                ts_probs_last_event_ts = []
-                ts_probs_last_event_te = []
-                ts_probs_first_event_ts = []
-                ts_probs_first_event_te = []
-
-                te_probs_last_event_ts = []
-                te_probs_last_event_te = []
-                te_probs_first_event_ts = []
-                te_probs_first_event_te = []
-
-                ref_time_ls = []
-
-                for (i, data_idx) in enumerate(idx_ls):
-                    flag_valid = 0
-                    if mode == 'Test':
-                        # data_idx -= num_samples_dist[1]
-
-                        if data_idx in input_intervals_dict:
-                            input_intervals[i] = input_intervals_dict[data_idx].tolist()
-
-                    if data_idx not in output_probs_with_ref_edges:
+            if flag_valid:
+                num_valid_edge = 0
+                for edge in refNode_res_rw:
+                    if len(refNode_res_rw[edge]) == 0:
                         continue
 
-                    refNode_probs = {}
-                    refNode_res_rw = {}
+                    num_valid_edge += 1
+                    res_random_walk.append([[len(res_random_walk), idx_rule] for idx_rule in refNode_res_rw[edge]])
+                    # print(refNode_probs[edge])
 
-                    for idx_first_or_last in [0,1]:
-                        event_type = ['first_event', 'last_event'][idx_first_or_last]
+                    x = []
+                    for idx_first_or_last in [0, 1]:
+                        for idx_query_ts_or_te in [0, 1]:
+                            for idx_ref_ts_or_te in [0, 1]:
+                                if self.option.flag_ruleLen_split_ver:
+                                    # x = [np.mean(refNode_probs[edge][(refNode_res_rw[edge] == 1) & (ruleLen_embedding[qq[i]] == l)], axis=0) for l in range(num_step-1)]
+                                    print('Todo')
+                                else:
+                                    cur_refNode_probs_ls = refNode_probs[edge][idx_first_or_last][idx_query_ts_or_te][idx_ref_ts_or_te]
+                                    if mode == 'Train':
+                                        cur_refNode_probs_ls = [[prob] for prob in cur_refNode_probs_ls]
+                                    cur_refNode_probs_ls += [1./len(self.data['timestamp_range']) * np.ones((dim,))] * (len(refNode_res_rw[edge]) - len(cur_refNode_probs_ls))
 
-                        for edge in output_probs_with_ref_edges[data_idx][event_type]:
-                            if edge not in refNode_probs:
-                                refNode_probs[edge] = {0: {0: {0:[], 1:[]}, 1: {0:[], 1:[]}}, 1: {0: {0:[], 1:[]}, 1: {0:[], 1:[]}}}
-                                refNode_res_rw[edge] = []
-
-                            for idx_query_ts_or_te in [0,1]:
-                                for idx_ref_ts_or_te in [0,1]:
-                                    x = output_probs_with_ref_edges[data_idx][event_type][edge][idx_query_ts_or_te][idx_ref_ts_or_te]
-
-                                    if len(x) > 0:
-                                        flag_valid = 1
-                                    for x1 in x:
-                                        refNode_probs[edge][idx_first_or_last][idx_query_ts_or_te][idx_ref_ts_or_te].append(x1[0])
-                                        refNode_res_rw[edge].append(x1[1])
-
-                        # print('------------------------')
-
-
-                    if flag_valid:
-                        num_valid_edge = 0
-                        for edge in refNode_res_rw:
-                            if len(refNode_res_rw[edge]) == 0:
-                                continue
-
-                            num_valid_edge += 1
-                            res_random_walk.append([[len(res_random_walk), idx_rule] for idx_rule in refNode_res_rw[edge]])
-                            # print(refNode_probs[edge])
-
-                            x = []
-                            for idx_first_or_last in [0, 1]:
-                                for idx_query_ts_or_te in [0, 1]:
-                                    for idx_ref_ts_or_te in [0, 1]:
-                                        if flag_ruleLen_split_ver:
-                                            # x = [np.mean(refNode_probs[edge][(refNode_res_rw[edge] == 1) & (ruleLen_embedding[qq[i]] == l)], axis=0) for l in range(num_step-1)]
+                                if mode == 'Train':
+                                    if self.option.prob_type_for_training == 'max':
+                                        if self.option.flag_ruleLen_split_ver:
                                             print('Todo')
                                         else:
-                                            cur_refNode_probs_ls = refNode_probs[edge][idx_first_or_last][idx_query_ts_or_te][idx_ref_ts_or_te]
-                                            if mode == 'Train':
-                                                cur_refNode_probs_ls = [[prob] for prob in cur_refNode_probs_ls]
-                                            cur_refNode_probs_ls += [1./len(timestamp_range) * np.ones((dim,))] * (len(refNode_res_rw[edge]) - len(cur_refNode_probs_ls))
-
-                                        if mode == 'Train':
-                                            if prob_type_for_training == 'max':
-                                                if flag_ruleLen_split_ver:
-                                                    # x = [np.max(refNode_probs[edge][(refNode_res_rw[edge] == 1) & (ruleLen_embedding[qq[i]] == l)], axis=0) for l in range(num_step-1)]
-                                                    print('Todo')
-                                                else:
-                                                    x.append(np.max(cur_refNode_probs_ls, axis=0))
-                                            else:
-                                                x.append(np.mean(cur_refNode_probs_ls, axis=0))
-                                        else:
-                                            x.append(np.mean(cur_refNode_probs_ls, axis=0))
-
-
-                            if flag_ruleLen_split_ver:
-                                # ts_probs_last_event_ts.append([x[l][1, 0, 0, :] for l in range(num_step-1)])
-                                # ts_probs_last_event_te.append([x[l][1, 0, 1, :] for l in range(num_step-1)])
-                                # ts_probs_first_event_ts.append([x[l][0, 0, 0, :] for l in range(num_step-1)])
-                                # ts_probs_first_event_te.append([x[l][0, 0, 1, :] for l in range(num_step-1)])
-
-                                # te_probs_last_event_ts.append([x[l][1, 1, 0, :] for l in range(num_step-1)])
-                                # te_probs_last_event_te.append([x[l][1, 1, 1, :] for l in range(num_step-1)])
-                                # te_probs_first_event_ts.append([x[l][0, 1, 0, :] for l in range(num_step-1)])
-                                # te_probs_first_event_te.append([x[l][0, 1, 1, :] for l in range(num_step-1)])
-                                print('Todo')
-                            else:
-                                ts_probs_last_event_ts.append(x[4])
-                                ts_probs_last_event_te.append(x[5])
-                                ts_probs_first_event_ts.append(x[0])
-                                ts_probs_first_event_te.append(x[1])
-
-                                te_probs_last_event_ts.append(x[6])
-                                te_probs_last_event_te.append(x[7])
-                                te_probs_first_event_ts.append(x[2])
-                                te_probs_first_event_te.append(x[3])
-
-
-                        if num_valid_edge > 0:
-                            valid_sample_idx.append(i)
-                            refNode_source.append(num_valid_edge)
-                            query_rels += [qq[i]] * num_valid_edge
-
-                # print(refNode_source)
-                # print(len(res_random_walk))
-
-                refNode_num = 0
-                for i in range(len(refNode_source)):
-                    # print(refNode_num)
-                    x = np.zeros((len(res_random_walk), ))
-                    x[refNode_num: refNode_num + refNode_source[i]] = 1
-                    refNode_num += refNode_source[i]
-                    refNode_source[i] = x.copy()
-
-                x = []
-                for i in range(len(res_random_walk)):
-                    x += res_random_walk[i]
-                res_random_walk = np.array(x)
-
-                probs = [ts_probs_first_event_ts, ts_probs_first_event_te, ts_probs_last_event_ts, ts_probs_last_event_te,
-                         te_probs_first_event_ts, te_probs_first_event_te, te_probs_last_event_ts, te_probs_last_event_te ]
-
-                return qq, query_rels, refNode_source, res_random_walk, probs, valid_sample_idx, input_intervals, input_samples, ref_time_ls
-            
-            
-            else:
-                valid_sample_idx = []
-                query_rels = []
-                refNode_source = []
-                res_random_walk = []
-
-                ts_probs_first_event = []
-                ts_probs_last_event = []
-                ts_probs_first_event_inv_rel = []
-                ts_probs_last_event_inv_rel = []
-
-                ref_time_ls = []
-                for (i, sample) in enumerate(input_samples):
-                    flag_valid = 0
-                    refNode_probs = {}
-                    refNode_res_rw = {}
-
-                    if self.data['random_walk_res'] is None:
-                        ref_time = None
-                        cur_path = '../output/' + dataset 
-                        if self.option.shift:
-                            cur_path += '_time_shifting'
-                        cur_path += '/samples/' + dataset + file_suffix + mode + '_sample_'+ str(tuple(sample)) +'.json'
-                        
-                        samples_dict = {str(tuple(sample)): []}
-                        if os.path.exists(cur_path):
-                            with open(cur_path, 'r') as file:
-                                samples_dict = json.load(file)
-
-                        # print(sample)
-                        # print(cur_path)
-
-                        sample_inv = obtain_inv_edge(np.array([sample]), num_rel//2)[0]
-                        samples_inv_dict = {str(tuple(sample_inv)): []}
-                        cur_path = '../output/' + dataset 
-                        if self.option.shift:
-                            cur_path += '_time_shifting'
-                        cur_path += '/samples/' + dataset + file_suffix
-                        if self.option.shift:
-                            cur_path += 'fix_ref_time_' 
-                        cur_path += mode + '_sample_'+ str(tuple(sample_inv)) +'.json'
-                        if os.path.exists(cur_path):
-                            with open(cur_path, 'r') as file:
-                                samples_inv_dict = json.load(file)
-
-                        if mode == 'Test' and str(tuple(sample_inv)) in samples_dict:
-                            ref_time = samples_dict['ref_time']
-                            samples_inv_dict[str(tuple(sample_inv))] = samples_dict[str(tuple(sample_inv))]
-                            samples_dict = {str(tuple(sample)): samples_dict[str(tuple(sample))]}
-                            if ref_time is None:
-                                continue
-                            # print(ref_time)
-                        # print(sample_inv)
-                        # print(cur_path)
-                        # print(samples_dict.keys())
-                        # print(samples_inv_dict.keys())
-                        # print(samples_dict)
-                        # print(samples_inv_dict)
-                        # print('-------------------')
-                        # continue
-
-                        input_edge_probs1 = create_inputs_v4(samples_dict, samples_inv_dict, None, pattern_ls, timestamp_range, num_rel//2, stat_res, mode=mode,
-                                                             dataset=dataset, file_suffix=file_suffix, 
-                                                             flag_compression = False, flag_write = False, 
-                                                             flag_time_shifting = self.option.shift,
-                                                             pattern_ls_fkt = pattern_ls_fkt,
-                                                             stat_res_fkt = stat_res_fkt, shift_ref_time=ref_time, flag_rm_seen_timestamp=True)
-                        if len(input_edge_probs1) == 0:
-                            continue
-
-                        input_edge_probs1 = input_edge_probs1[0]
-                        # sys.exit()
-                        # for k in input_edge_probs1:
-                        #     print(ref_time, k, input_edge_probs1[k])
-                        #     if len(input_edge_probs1[k]) > 0:
-                        #         print(input_edge_probs1[k][:ref_time])
-                        #     print('-----------------')
-
-
-                        input_edge_probs = []
-                        for j_k in ['input_edge_probs_first_ref', 'input_edge_probs_last_ref', 'input_edge_probs_first_ref_inv_rel', 'input_edge_probs_last_ref_inv_rel']:
-                            input_edge_probs.append({tuple(sample): inv_convert_dict(input_edge_probs1[j_k])})
-
-                    type_ref_time = ['ts_first_event', 'ts_last_event', 'ts_first_event', 'ts_last_event']
-                    cur_rel_ls = [qq[i], qq[i], qq[i] + num_rel//2, qq[i] + num_rel//2]
-
-                    for j in range(4):
-                        if tuple(sample) not in input_edge_probs[j]:
-                            continue
-
-                        for edge in input_edge_probs[j][tuple(sample)]:
-                            if edge not in refNode_probs:
-                                refNode_probs[edge] = {0:[], 1:[], 2: [], 3:[]}
-                                refNode_res_rw[edge] = []
-
-                                x = input_edge_probs[j][tuple(sample)][edge]
-                                if len(x)>0:
-                                    flag_valid = 1
-                                for x1 in x:
-                                    refNode_probs[edge][j].append(x1[0])
-                                    refNode_res_rw[edge].append(x1[1])
-
-
-                    if flag_valid:
-                        num_valid_edge = 0
-                        for edge in refNode_res_rw:
-                            if len(refNode_res_rw[edge]) == 0:
-                                continue
-
-                            num_valid_edge += 1
-                            res_random_walk.append([[len(res_random_walk), idx_rule] for idx_rule in refNode_res_rw[edge]])
-
-                            x = []
-                            for j in range(4):
-                                cur_refNode_probs_ls = refNode_probs[edge][j]
-                                if mode == 'Train':
-                                    cur_refNode_probs_ls = [[prob] for prob in cur_refNode_probs_ls]
-
-                                dummy_cur_refNode_probs = [1./len(timestamp_range) * np.ones((dim,))]
-                                if self.option.shift:
-                                    dummy_cur_refNode_probs = rm_seen_timestamp(dummy_cur_refNode_probs, timestamp_range, ref_time)
-                                
-                                if self.option.shift:
-                                    dummy_cur_refNode_probs = [generate_exp_dist(weight_exp_dist, scale_exp_dist, offset_exp_dist, timestamp_range, ref_time)]
-
-                                cur_refNode_probs_ls += dummy_cur_refNode_probs * (len(refNode_res_rw[edge])-len(refNode_probs[edge][j]))
-                                
-                                if self.option.shift and 0:
-                                    cur_refNode_probs_ls = [rm_seen_timestamp([np.array(cur_refNode_probs)], timestamp_range, ref_time)[0].tolist() for cur_refNode_probs in cur_refNode_probs_ls]
-                                
-                                if mode == 'Train':
-                                    if prob_type_for_training == 'max':
-                                        x.append(np.max(cur_refNode_probs_ls, axis=0))
+                                            x.append(np.max(cur_refNode_probs_ls, axis=0))
                                     else:
                                         x.append(np.mean(cur_refNode_probs_ls, axis=0))
                                 else:
-                                    # x.append(np.mean(cur_refNode_probs_ls, axis=0) + generate_exp_dist(weight_exp_dist, scale_exp_dist, offset_exp_dist, timestamp_range, ref_time))
                                     x.append(np.mean(cur_refNode_probs_ls, axis=0))
 
 
-                            ts_probs_first_event.append(x[0])
-                            ts_probs_last_event.append(x[1])
-                            ts_probs_first_event_inv_rel.append(x[2])
-                            ts_probs_last_event_inv_rel.append(x[3])
+                    if self.option.flag_ruleLen_split_ver:
+                        print('Todo')
+                    else:
+                        ts_probs_last_event_ts.append(x[4])
+                        ts_probs_last_event_te.append(x[5])
+                        ts_probs_first_event_ts.append(x[0])
+                        ts_probs_first_event_te.append(x[1])
+
+                        te_probs_last_event_ts.append(x[6])
+                        te_probs_last_event_te.append(x[7])
+                        te_probs_first_event_ts.append(x[2])
+                        te_probs_first_event_te.append(x[3])
 
 
-                        if num_valid_edge>0:
-                            valid_sample_idx.append(i)
-                            refNode_source.append(num_valid_edge)
-                            query_rels += [qq[i]] * num_valid_edge
-                            ref_time_ls.append(ref_time)
+                if num_valid_edge > 0:
+                    valid_sample_idx.append(i)
+                    refNode_source.append(num_valid_edge)
+                    query_rels += [qq[i]] * num_valid_edge
 
 
-                refNode_num = 0
-                for i in range(len(refNode_source)):
-                    x = np.zeros((len(res_random_walk), ))
-                    x[refNode_num: refNode_num + refNode_source[i]] = 1
-                    refNode_num += refNode_source[i]
-                    refNode_source[i] = x.copy()
+        refNode_num = 0
+        for i in range(len(refNode_source)):
+            # print(refNode_num)
+            x = np.zeros((len(res_random_walk), ))
+            x[refNode_num: refNode_num + refNode_source[i]] = 1
+            refNode_num += refNode_source[i]
+            refNode_source[i] = x.copy()
 
-                x = []
-                for i in range(len(res_random_walk)):
-                    x += res_random_walk[i]
-                res_random_walk = np.array(x)
-                probs = [ts_probs_first_event, ts_probs_last_event, ts_probs_first_event_inv_rel, ts_probs_last_event_inv_rel]
+        x = []
+        for i in range(len(res_random_walk)):
+            x += res_random_walk[i]
+        res_random_walk = np.array(x)
 
-                return qq, query_rels, refNode_source, res_random_walk, probs, valid_sample_idx, input_intervals, input_samples, ref_time_ls
+        probs = [ts_probs_first_event_ts, ts_probs_first_event_te, ts_probs_last_event_ts, ts_probs_last_event_te,
+                 te_probs_first_event_ts, te_probs_first_event_te, te_probs_last_event_ts, te_probs_last_event_te ]
+
+        return qq, query_rels, refNode_source, res_random_walk, probs, valid_sample_idx, input_intervals, input_samples, ref_time_ls
+
+
+
+    def create_TEKG_in_batch_timestamp_acc_ver(self, idx_ls, mode):
+        pattern_ls_fkt = None
+        stat_res_fkt = None
+        if self.option.shift:
+            pattern_ls_fkt = self.data['pattern_ls_fkt']
+            stat_res_fkt = self.data['stat_res_fkt']
+
+        if self.data['random_walk_res'] is not None:
+            input_edge_probs = self.data['random_walk_res']
+
+
+        input_samples = self.edges[idx_ls]
+        input_intervals = self.edges[idx_ls, 3]
+        qq = self.edges[idx_ls, 1]
+
+
+        dim = 1
+        if mode == 'Test':
+            dim = len(self.data['timestamp_range'])
+
+        valid_sample_idx = []
+        query_rels = []
+        refNode_source = []
+        res_random_walk = []
+
+        ts_probs_first_event = []
+        ts_probs_last_event = []
+        ts_probs_first_event_inv_rel = []
+        ts_probs_last_event_inv_rel = []
+
+        ref_time_ls = []
+        for (i, sample) in enumerate(input_samples):
+            flag_valid = 0
+            refNode_probs = {}
+            refNode_res_rw = {}
+
+            if self.data['random_walk_res'] is None:
+                ref_time = None
+                cur_path = '../output/' + self.data['dataset'] 
+                if self.option.shift:
+                    cur_path += '_time_shifting'
+                cur_path += '/samples/' + self.data['dataset'] + self.file_suffix + mode + '_sample_'+ str(tuple(sample)) +'.json'
+                
+                samples_dict = {str(tuple(sample)): []}
+                if os.path.exists(cur_path):
+                    with open(cur_path, 'r') as file:
+                        samples_dict = json.load(file)
+
+
+                sample_inv = obtain_inv_edge(np.array([sample]), self.data['num_rel']//2)[0]
+                samples_inv_dict = {str(tuple(sample_inv)): []}
+                cur_path = '../output/' + self.data['dataset'] 
+                if self.option.shift:
+                    cur_path += '_time_shifting'
+                cur_path += '/samples/' + self.data['dataset'] + self.file_suffix
+                if self.option.shift:
+                    cur_path += 'fix_ref_time_' 
+                cur_path += mode + '_sample_'+ str(tuple(sample_inv)) +'.json'
+                if os.path.exists(cur_path):
+                    with open(cur_path, 'r') as file:
+                        samples_inv_dict = json.load(file)
+
+                if mode == 'Test' and str(tuple(sample_inv)) in samples_dict:
+                    ref_time = samples_dict['ref_time']
+                    samples_inv_dict[str(tuple(sample_inv))] = samples_dict[str(tuple(sample_inv))]
+                    samples_dict = {str(tuple(sample)): samples_dict[str(tuple(sample))]}
+                    if ref_time is None:
+                        continue
+
+                input_edge_probs1 = create_inputs_v4(samples_dict, samples_inv_dict, None, self.data['pattern_ls'], self.data['timestamp_range'], self.data['num_rel']//2, self.data['stat_res'], mode=mode,
+                                                     dataset=self.data['dataset'], file_suffix=self.file_suffix, 
+                                                     flag_compression = False, flag_write = False, 
+                                                     flag_time_shifting = self.option.shift,
+                                                     pattern_ls_fkt = pattern_ls_fkt,
+                                                     stat_res_fkt = stat_res_fkt, shift_ref_time=ref_time, flag_rm_seen_timestamp=True)
+                if len(input_edge_probs1) == 0:
+                    continue
+
+                input_edge_probs1 = input_edge_probs1[0]
+
+                input_edge_probs = []
+                for j_k in ['input_edge_probs_first_ref', 'input_edge_probs_last_ref', 'input_edge_probs_first_ref_inv_rel', 'input_edge_probs_last_ref_inv_rel']:
+                    input_edge_probs.append({tuple(sample): inv_convert_dict(input_edge_probs1[j_k])})
+
+            type_ref_time = ['ts_first_event', 'ts_last_event', 'ts_first_event', 'ts_last_event']
+            cur_rel_ls = [qq[i], qq[i], qq[i] + self.data['num_rel']//2, qq[i] + self.data['num_rel']//2]
+
+            for j in range(4):
+                if tuple(sample) not in input_edge_probs[j]:
+                    continue
+
+                for edge in input_edge_probs[j][tuple(sample)]:
+                    if edge not in refNode_probs:
+                        refNode_probs[edge] = {0:[], 1:[], 2: [], 3:[]}
+                        refNode_res_rw[edge] = []
+
+                        x = input_edge_probs[j][tuple(sample)][edge]
+                        if len(x)>0:
+                            flag_valid = 1
+                        for x1 in x:
+                            refNode_probs[edge][j].append(x1[0])
+                            refNode_res_rw[edge].append(x1[1])
+
+
+            if flag_valid:
+                num_valid_edge = 0
+                for edge in refNode_res_rw:
+                    if len(refNode_res_rw[edge]) == 0:
+                        continue
+
+                    num_valid_edge += 1
+                    res_random_walk.append([[len(res_random_walk), idx_rule] for idx_rule in refNode_res_rw[edge]])
+
+                    x = []
+                    for j in range(4):
+                        cur_refNode_probs_ls = refNode_probs[edge][j]
+                        if mode == 'Train':
+                            cur_refNode_probs_ls = [[prob] for prob in cur_refNode_probs_ls]
+
+                        dummy_cur_refNode_probs = [1./len(self.data['timestamp_range']) * np.ones((dim,))]
+                        if self.option.shift:
+                            dummy_cur_refNode_probs = rm_seen_timestamp(dummy_cur_refNode_probs, self.data['timestamp_range'], ref_time)
+                        
+                        if self.option.shift:
+                            dummy_cur_refNode_probs = [generate_exp_dist(self.weight_exp_dist, self.scale_exp_dist, self.offset_exp_dist, self.data['timestamp_range'], ref_time)]
+
+                        cur_refNode_probs_ls += dummy_cur_refNode_probs * (len(refNode_res_rw[edge])-len(refNode_probs[edge][j]))
+                        
+                        if self.option.shift and 0:
+                            cur_refNode_probs_ls = [rm_seen_timestamp([np.array(cur_refNode_probs)], self.data['timestamp_range'], ref_time)[0].tolist() for cur_refNode_probs in cur_refNode_probs_ls]
+                        
+                        if mode == 'Train':
+                            if self.option.prob_type_for_training == 'max':
+                                x.append(np.max(cur_refNode_probs_ls, axis=0))
+                            else:
+                                x.append(np.mean(cur_refNode_probs_ls, axis=0))
+                        else:
+                            # x.append(np.mean(cur_refNode_probs_ls, axis=0) + generate_exp_dist(weight_exp_dist, scale_exp_dist, offset_exp_dist, self.data['timestamp_range'], ref_time))
+                            x.append(np.mean(cur_refNode_probs_ls, axis=0))
+
+
+                    ts_probs_first_event.append(x[0])
+                    ts_probs_last_event.append(x[1])
+                    ts_probs_first_event_inv_rel.append(x[2])
+                    ts_probs_last_event_inv_rel.append(x[3])
+
+
+                if num_valid_edge>0:
+                    valid_sample_idx.append(i)
+                    refNode_source.append(num_valid_edge)
+                    query_rels += [qq[i]] * num_valid_edge
+                    ref_time_ls.append(ref_time)
+
+
+        refNode_num = 0
+        for i in range(len(refNode_source)):
+            x = np.zeros((len(res_random_walk), ))
+            x[refNode_num: refNode_num + refNode_source[i]] = 1
+            refNode_num += refNode_source[i]
+            refNode_source[i] = x.copy()
+
+        x = []
+        for i in range(len(res_random_walk)):
+            x += res_random_walk[i]
+        res_random_walk = np.array(x)
+        probs = [ts_probs_first_event, ts_probs_last_event, ts_probs_first_event_inv_rel, ts_probs_last_event_inv_rel]
+
+        return qq, query_rels, refNode_source, res_random_walk, probs, valid_sample_idx, input_intervals, input_samples, ref_time_ls
+
+
+
+
+    def create_TEKG_in_batch(self, idx_ls, mode):
+        # dataset = self.data['dataset']
+        # dataset_name = self.data['dataset_name']
             
+        # num_samples_dist = self.data['num_samples_dist']
+        # timestamp_range = self.data['timestamp_range']
+
+        # num_rel = self.data['num_rel']
+        # num_entity = self.data['num_entity']
+
+        # prob_type_for_training = self.option.prob_type_for_training
+        # num_step = self.option.num_step-1
+        # flag_ruleLen_split_ver = self.option.flag_ruleLen_split_ver
+        # # flag_acceleration = self.option.flag_acceleration
+        # flag_time_shift = self.option.shift
+        # num_rule = self.option.num_rule
+
+        # mdb = self.data['mdb']
+        # connectivity = self.data['connectivity']
+        # TEKG_nodes = self.data['TEKG_nodes']
+        # file_suffix = '_'
+        # if self.option.shift:
+        #     file_suffix = '_time_shifting_'
+
+        # dataset_index = ['wiki', 'YAGO', 'icews14', 'icews05-15', 'gdelt100'].index(dataset_name)
+        # weight_exp_dist = [None, None, 0.01, 0.01, 0.05][dataset_index]
+        # scale_exp_dist = [None, None, 5, 10, 100][dataset_index]
+        # offset_exp_dist = [None, None, 0, 0, 0][dataset_index]
+
+
+
+        # if self.data['dataset_name'] in ['wiki', 'YAGO']:
+        #     path = self.data['path']
+        #     edges = np.vstack((self.data['train_edges'], self.data['valid_edges'], self.data['test_edges']))
+        #     pattern_ls = self.data['pattern_ls']
+        #     ts_stat_ls = self.data['ts_stat_ls']
+        #     te_stat_ls = self.data['te_stat_ls']
+        #     rm_ls = self.data['rm_ls']
+        #     output_probs_with_ref_edges = self.data['random_walk_res']
+        # else:
+        #     edges = np.vstack((self.data['train_edges'], self.data['valid_edges'], self.data['test_edges']))
+        #     pattern_ls = self.data['pattern_ls']
+        #     stat_res = self.data['stat_res']
+        #     pattern_ls_fkt = None
+        #     stat_res_fkt = None
+        #     if self.option.shift:
+        #         pattern_ls_fkt = self.data['pattern_ls_fkt']
+        #         stat_res_fkt = self.data['stat_res_fkt']
+
+        #     if self.data['random_walk_res'] is not None:
+        #         input_edge_probs = self.data['random_walk_res']
 
 
         flag_use_batch_graph = False
