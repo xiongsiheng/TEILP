@@ -680,9 +680,8 @@ class Experiment():
                 res_random_walk = np.array(x)
                 probs = [ts_probs_first_event, ts_probs_last_event, ts_probs_first_event_inv_rel, ts_probs_last_event_inv_rel]
 
-            return qq, query_rels, refNode_source, res_random_walk, probs, valid_sample_idx, input_intervals, input_samples, ref_time_ls
-
-
+                return qq, query_rels, refNode_source, res_random_walk, probs, valid_sample_idx, input_intervals, input_samples, ref_time_ls
+            
 
 
         flag_use_batch_graph = False

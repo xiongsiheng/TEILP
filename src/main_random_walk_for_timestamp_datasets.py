@@ -48,29 +48,6 @@ def half_split_data(data):
 
 
 
-# if dataset == 'gdelt100' and flag_time_shifting:
-#     with open('../data/gdelt100_sparse_idx.json') as json_file:
-#         random_idx = json.load(json_file)
-
-#     num_train = [16000, 2000]
-#     edges = np.vstack([half_split_data(data.train_idx)[0], half_split_data(data.valid_idx)[0], half_split_data(data.test_idx)[0]])
-#     edges = edges[random_idx]
-
-#     train_edges = edges[:num_train[0]]
-#     valid_edges = edges[num_train[0]:num_train[0] + num_train[1]]
-#     test_edges = edges[num_train[0] + num_train[1]:]
-
-#     edges = np.vstack([half_split_data(data.train_idx)[1], half_split_data(data.valid_idx)[1], half_split_data(data.test_idx)[1]])
-#     edges = edges[random_idx]
-
-#     data.train_idx = np.vstack([train_edges, edges[:num_train[0]]])
-#     data.valid_idx = np.vstack([valid_edges, edges[num_train[0]:num_train[0] + num_train[1]]])
-#     data.test_idx = np.vstack([test_edges, edges[num_train[0] + num_train[1]:]])
-
-#     print(half_split_data(data.train_idx)[0])
-#     print(half_split_data(data.train_idx)[1])
-
-
 if dataset == 'gdelt100' and flag_time_shifting:
     def obtain_inv_edge(edges, num_rel):
         return np.hstack([edges[:,2:3], edges[:,1:2] + num_rel, edges[:,0:1], edges[:,3:]])
@@ -85,29 +62,25 @@ if dataset == 'gdelt100' and flag_time_shifting:
     valid_edges = edges[num_train[0]:num_train[0] + num_train[1]]
     test_edges = edges[num_train[0] + num_train[1]:]
 
-    # print(train_edges)
 
     data.train_idx = np.vstack([train_edges, obtain_inv_edge(train_edges, num_rel)])
     data.valid_idx = np.vstack([valid_edges, obtain_inv_edge(valid_edges, num_rel)])
     data.test_idx = np.vstack([test_edges, obtain_inv_edge(test_edges, num_rel)])
 
-    # print(data.train_idx)
 
-    # sys.exit()
 
 
 transition_distr = ["unif", "exp"][-1]
 BG_idx = [data.train_idx, data.valid_idx, data.test_idx][0]
 
-# print(data.train_idx)
-# print(max(data.train_idx[:, 1]))
-# sys.exit()
+
 
 num_walks_per_sample = [10, 3, 10][dataset_idx]
 num_samples_per_rel = [100, 100, 500][dataset_idx]
 
 
-
+if not os.path.exists('../output/'):
+    os.mkdir('../output/')
 
 
 def my_shuffle(data):

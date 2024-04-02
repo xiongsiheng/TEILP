@@ -88,7 +88,7 @@ if targ_rel is not None:
 train_edges, valid_data, valid_data_inv, test_data, test_data_inv = obtain_dataset(dataset_name1, num_rel)
 
 
-# mask valid / test data
+# mask valid / test data time
 if not flag_time_shift:
     if f_interval:
         valid_data[:, [3,4]] = 9999
@@ -120,6 +120,10 @@ if flag_few_training:
     pos_examples_idx += [idx + num_train + num_valid + num_test for idx in pos_examples_idx]
 
 
+if not os.path.exists('../output/'):
+    os.mkdir('../output/')
+
+
 random_walk(targ_rel_ls, edges, para_ls_for_walker, pos_examples_idx = pos_examples_idx, time_shift_mode=flag_time_shift, output_path=output_path,
                          ratio=ratio, imbalanced_rel=imbalanced_rel, exp_idx=exp_idx)
 
@@ -127,6 +131,8 @@ random_walk(targ_rel_ls, edges, para_ls_for_walker, pos_examples_idx = pos_examp
 output = convert_walks_into_rules(dataset=dataset_using, path='../output/' + output_path, idx_ls=pos_examples_idx, 
                                       flag_time_shift=flag_time_shift, flag_biased=flag_biased, flag_few_training=flag_few_training,
                                       ratio=ratio, imbalanced_rel=imbalanced_rel, exp_idx=exp_idx)
+
+
 
 
 
