@@ -1109,9 +1109,10 @@ def read_random_walk_results(dataset, rel_ls, file_paths, file_suffix, data1=Non
     output_dir = '../output/' + dataset + '/'
     if flag_time_shifting:
         output_dir = '../output/' + dataset + '_time_shifting/'
-        if not os.path.exists(output_dir):
-            os.mkdir(output_dir)
-            os.mkdir(output_dir + 'samples')
+
+    if not os.path.exists(output_dir):
+        os.mkdir(output_dir)
+        os.mkdir(output_dir + 'samples')
 
     for rel in rel_ls:
         # print('rel: ', rel)
@@ -2309,6 +2310,8 @@ def prepare_graph_random_walk_res(option, data, mode, num_workers=20, file_suffi
             idx_ls = data['train_idx_ls']
         else:
             idx_ls = data['test_idx_ls']
+
+        # print(len(idx_ls))
 
         # num_workers = 24
         idx_pieces = split_list_into_pieces(idx_ls, num_workers)
