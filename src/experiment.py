@@ -36,19 +36,6 @@ class Experiment():
             self.metrics = ['MAE']
 
 
-        self.file_suffix = '_'
-        if self.option.shift:
-            self.file_suffix = '_time_shifting_'
-
-        dataset_index = ['wiki', 'YAGO', 'icews14', 'icews05-15', 'gdelt100'].index(self.data['dataset_name'])
-        self.weight_exp_dist = [None, None, 0.01, 0.01, 0.05][dataset_index]
-        self.scale_exp_dist = [None, None, 5, 10, 100][dataset_index]
-        self.offset_exp_dist = [None, None, 0, 0, 0][dataset_index]
-
-        self.edges = np.vstack((self.data['train_edges'], self.data['valid_edges'], self.data['test_edges']))
-
-
-
     def one_epoch(self, mode, total_idx=None):
         epoch_loss = []
         epoch_eval_aeIOU = []
@@ -78,6 +65,16 @@ class Experiment():
         if self.option.flag_use_dur:
             pred_dur_dict = self.data['pred_dur']
 
+
+        if self.option.flag_acceleration:
+            if self.data['dataset_name'] in ['icews14', 'icews05-15', 'gdelt']:
+                TEKG = TEKG_creator_timestamp_acc_ver(self.option, self.data)
+            else:
+                TEKG = TEKG_creator_interval_acc_ver(self.option, self.data)
+        else:
+            TEKG = TEKG_creator(self.option, self.data)
+
+
         for (i, batch_idx_ls) in enumerate(idx_ls):
             if self.option.flag_acceleration:
                 if mode == "Train":
@@ -92,12 +89,9 @@ class Experiment():
 
 
             if self.option.flag_acceleration:
-                if self.data['dataset_name'] in ['icews14', 'icews05-15', 'gdelt']:
-                    qq, query_rels, refNode_source, res_random_walk, probs, valid_sample_idx, input_intervals, input_samples, ref_time_ls = self.create_TEKG_in_batch_timestamp_acc_ver(batch_idx_ls, mode)
-                else:
-                    qq, query_rels, refNode_source, res_random_walk, probs, valid_sample_idx, input_intervals, input_samples, ref_time_ls = self.create_TEKG_in_batch_interval_acc_ver(batch_idx_ls, mode)
+                qq, query_rels, refNode_source, res_random_walk, probs, valid_sample_idx, input_intervals, input_samples, ref_time_ls = TEKG.create_TEKG_in_batch(batch_idx_ls, mode)
             else:
-                qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, valid_ref_event_idx, input_intervals, input_samples = self.create_TEKG_in_batch(batch_idx_ls, mode)
+                qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, valid_ref_event_idx, input_intervals, input_samples = TEKG.create_TEKG_in_batch(batch_idx_ls, mode)
 
 
             save_data(self.option.savetxt, 'TEKG_prepared!')
@@ -271,7 +265,26 @@ class Experiment():
 
 
 
-    def create_TEKG_in_batch_interval_acc_ver(self, idx_ls, mode):
+class TEKG_creator_base():
+    def __init__(self, option, data):
+        self.option = option
+        self.data = data
+
+        self.file_suffix = '_'
+        if self.option.shift:
+            self.file_suffix = '_time_shifting_'
+
+        dataset_index = ['wiki', 'YAGO', 'icews14', 'icews05-15', 'gdelt100'].index(self.data['dataset_name'])
+        self.weight_exp_dist = [None, None, 0.01, 0.01, 0.05][dataset_index]
+        self.scale_exp_dist = [None, None, 5, 10, 100][dataset_index]
+        self.offset_exp_dist = [None, None, 0, 0, 0][dataset_index]
+
+        self.edges = np.vstack((self.data['train_edges'], self.data['valid_edges'], self.data['test_edges']))
+
+
+
+class TEKG_creator_interval_acc_ver(TEKG_creator_base):
+    def create_TEKG_in_batch(self, idx_ls, mode):
         random_walk_res, input_intervals_dict = self._initialize_walk_res(idx_ls, mode)
 
         query_edges, query_intervals = self._load_queries(idx_ls)
@@ -284,6 +297,39 @@ class Experiment():
 
         return query_relations, valid_query_relations, refNode_sources, valid_rule_idx, probabilities, valid_sample_idxs, query_intervals, [], []
 
+
+    def _adjust_intervals_for_test_mode(self, idx_ls, query_intervals, input_intervals_dict):
+        for i, data_idx in enumerate(idx_ls):
+            if data_idx in input_intervals_dict:
+                query_intervals[i] = input_intervals_dict[data_idx].tolist()
+
+
+
+    def _finalize_refNode_sources(self, refNode_sources, rule_idx):
+        # Finalizes the structure of refNode_sources based on rule_idx
+        refNode_num = 0
+        for i in range(len(refNode_sources)):
+            # print(refNode_num)
+            x = np.zeros((len(rule_idx), ))
+            x[refNode_num: refNode_num + refNode_sources[i]] = 1
+            refNode_num += refNode_sources[i]
+            refNode_sources[i] = x.copy()
+
+        x = []
+        for i in range(len(rule_idx)):
+            x += rule_idx[i]
+
+        return np.array(x)
+
+
+
+    def _initialize_probabilities_lists(self):
+        # Initializes and returns empty lists for each probability type
+        return [[], [], [], [], [], [], [], []]
+
+    def _initialize_refNode_structures(self):
+        # Initializes structures to hold probabilities and random walk results for reference nodes
+        return {}, {}
 
 
     def _initialize_walk_res(self, idx_ls, mode):
@@ -309,14 +355,6 @@ class Experiment():
             return self.data['random_walk_res'], self._prepare_test_interval(idx_ls) if mode == 'Test' else {}
 
 
-    def _prepare_test_interval(self, idx_ls):
-        input_intervals_dict = {}
-        for data_idx in idx_ls:
-            data_idx -= self.data['num_samples_dist'][1] # idx alignment
-            cur_interval = self.edges[data_idx, 3:]
-            input_intervals_dict[data_idx] = cur_interval
-        return input_intervals_dict
-
 
     def _load_queries(self, idx_ls):
         query_edges, query_intervals = [], []
@@ -331,10 +369,15 @@ class Experiment():
         return query_edges, query_intervals
 
 
-    def _adjust_intervals_for_test_mode(self, idx_ls, query_intervals, input_intervals_dict):
-        for i, data_idx in enumerate(idx_ls):
-            if data_idx in input_intervals_dict:
-                query_intervals[i] = input_intervals_dict[data_idx].tolist()
+
+    def _prepare_test_interval(self, idx_ls):
+        input_intervals_dict = {}
+        for data_idx in idx_ls:
+            data_idx -= self.data['num_samples_dist'][1] # idx alignment
+            cur_interval = self.edges[data_idx, 3:]
+            input_intervals_dict[data_idx] = cur_interval
+        return input_intervals_dict
+
 
 
     def _process_edges(self, idx_ls, random_walk_res, mode, query_relations):
@@ -354,13 +397,7 @@ class Experiment():
         return valid_sample_idxs, valid_query_relations, refNode_sources, valid_rule_idx, probabilities
 
 
-    def _initialize_probabilities_lists(self):
-        # Initializes and returns empty lists for each probability type
-        return [[], [], [], [], [], [], [], []]
 
-    def _initialize_refNode_structures(self):
-        # Initializes structures to hold probabilities and random walk results for reference nodes
-        return {}, {}
 
     def _populate_refNode_structures(self, data_idx, refNode_probs, refNode_res_rw, random_walk_res):
         # Populates refNode_probs and refNode_res_rw based on random_walk_res
@@ -434,29 +471,8 @@ class Experiment():
 
 
 
-
-    def _finalize_refNode_sources(self, refNode_sources, rule_idx):
-        # Finalizes the structure of refNode_sources based on rule_idx
-        refNode_num = 0
-        for i in range(len(refNode_sources)):
-            # print(refNode_num)
-            x = np.zeros((len(rule_idx), ))
-            x[refNode_num: refNode_num + refNode_sources[i]] = 1
-            refNode_num += refNode_sources[i]
-            refNode_sources[i] = x.copy()
-
-        x = []
-        for i in range(len(rule_idx)):
-            x += rule_idx[i]
-
-        return np.array(x)
-
-
-
-
-
-
-    def create_TEKG_in_batch_timestamp_acc_ver(self, idx_ls, mode):
+class TEKG_creator_timestamp_acc_ver(TEKG_creator_base):
+    def create_TEKG_in_batch(self, idx_ls, mode):
         """
         Create Temporal Edge Knowledge Graphs (TEKG) in batch with timestamp accuracy verification.
         
@@ -493,103 +509,25 @@ class Experiment():
 
 
 
-    def _handle_option_shift(self):
+    def _aggregate_probs_for_events(self, probs, mode):
         """
-        Handles the 'shift' option in the TEKG data preparation.
-        
-        Returns:
-        A tuple containing pattern and statistics results if option 'shift' is enabled.
-        """
-        if self.option.shift:
-            return self.data['pattern_ls_fkt'], self.data['stat_res_fkt']
-        return None, None
-
-
-    def _extract_edge_info(self, idx_ls):
-        """
-        Extracts edge information from the provided indices.
+        Aggregates probabilities for an event type based on the mode.
         
         Parameters:
-        - idx_ls: List of indices for which to extract edge information.
-        
-        Returns:
-        A tuple of input samples, intervals, and relationship types.
-        """
-        input_samples = self.edges[idx_ls]
-        input_intervals = self.edges[idx_ls, 3]
-        qq = self.edges[idx_ls, 1]
-        return input_samples, input_intervals, qq
-
-
-    def _process_sample(self, sample, mode, pattern_ls_fkt, stat_res_fkt, rel_type):
-        """
-        Processes a single sample for TEKG generation, including loading data,
-        handling inversions, and calculating probabilities.
-        
-        Parameters:
-        - sample: The current sample to process.
+        - probs: List of probabilities for an event.
         - mode: The mode of operation, e.g., 'Test' or 'Train'.
-        - pattern_ls_fkt: Pre-computed pattern list function if option 'shift' is enabled.
-        - stat_res_fkt: Pre-computed statistics results function if option 'shift' is enabled.
-        - rel_type: The type of relationship for the current sample.
         
         Returns:
-        A dictionary containing processed information for the sample or None if not valid.
+        Aggregated probabilities for the event. This implementation simply takes the mean of the probabilities,
+        but you might choose a different strategy based on your application's specifics.
         """
-        
-        sample_dict = self._load_sample_data(sample, mode)
-        sample_inv_dict = self._load_sample_data(self._obtain_inv_edge(sample), mode, inverse=True)
+        if mode == 'Train' and self.option.prob_type_for_training == 'max':
+            # For training, you might prefer the mean to smooth out the data
+            return np.max(probs)
+        else:
+            # For testing or other modes, you might choose the maximum probability to focus on the most likely event
+            return np.mean(probs)
 
-        # if not sample_dict or not sample_inv_dict:
-        #     return None
-
-        # Assuming create_inputs_v4 and other required methods are defined elsewhere within the class
-        input_edge_probs = create_inputs_v4(sample_dict, sample_inv_dict, None, self.data['pattern_ls'], self.data['timestamp_range'], 
-                                             self.data['num_rel']//2, self.data['stat_res'], mode=mode,
-                                             dataset=self.data['dataset'], file_suffix=self.file_suffix, 
-                                             flag_compression = False, flag_write = False, 
-                                             flag_time_shifting = self.option.shift,
-                                             pattern_ls_fkt = pattern_ls_fkt,
-                                             stat_res_fkt = stat_res_fkt, shift_ref_time=None, flag_rm_seen_timestamp=True)
-
-        if len(input_edge_probs) == 0:
-            return None
-
-        input_edge_probs = self._convert_format_edge_probs(input_edge_probs, sample)
-
-        flag_valid, probs, res_random_walk, num_valid_edge = self._calculate_probs_and_walks(input_edge_probs, sample, rel_type, mode)
-
-        if not flag_valid:
-            return None
-
-        ref_time = sample_dict.get('ref_time')
-        return {
-            'query_rels': [rel_type] * num_valid_edge,
-            'num_valid_edge': num_valid_edge,
-            'res_random_walk': res_random_walk,
-            'probs': probs,
-            'ref_time': ref_time
-        }
-
-
-
-    def _load_sample_data(self, sample, mode, inverse=False):
-        """
-        Load data for a sample or its inverse from the filesystem.
-        
-        Parameters:
-        - sample: The sample to load data for.
-        - mode: The mode of operation, e.g., 'Test' or 'Train'.
-        - inverse: Boolean indicating if the inverse sample data should be loaded.
-        
-        Returns:
-        Loaded data as a dictionary or None if the file does not exist.
-        """
-        cur_path = self._build_sample_path(sample, mode, inverse)
-        if os.path.exists(cur_path):
-            with open(cur_path, 'r') as file:
-                return json.load(file)
-        return {str(tuple(sample)): []}
 
 
 
@@ -620,22 +558,6 @@ class Experiment():
 
         return cur_path
 
-
-    def _obtain_inv_edge(self, sample):
-        """
-        Obtain the inverse edge for a given sample.
-        
-        Parameters:
-        - sample: The sample for which to find the inverse edge.
-        
-        Returns:
-        Inverse edge.
-        """
-        # Assuming the logic to obtain the inverse edge is implemented here.
-
-        sample_inv = obtain_inv_edge(np.array([sample]), self.data['num_rel']//2)[0]
-
-        return sample_inv
 
 
     def _convert_format_edge_probs(input_edge_probs1, sample):
@@ -696,6 +618,23 @@ class Experiment():
         return flag_valid, probs_combined, res_random_walk, num_valid_edge
 
 
+
+    def _extract_edge_info(self, idx_ls):
+        """
+        Extracts edge information from the provided indices.
+        
+        Parameters:
+        - idx_ls: List of indices for which to extract edge information.
+        
+        Returns:
+        A tuple of input samples, intervals, and relationship types.
+        """
+        input_samples = self.edges[idx_ls]
+        input_intervals = self.edges[idx_ls, 3]
+        qq = self.edges[idx_ls, 1]
+        return input_samples, input_intervals, qq
+
+
     def _generate_random_walks_for_edge(self, probs, sample, edge):
         """
         Generates random walks for a given edge based on probabilities.
@@ -719,24 +658,54 @@ class Experiment():
         return random_walks
 
 
-    def _aggregate_probs_for_events(self, probs, mode):
+
+    def _handle_option_shift(self):
         """
-        Aggregates probabilities for an event type based on the mode.
-        
-        Parameters:
-        - probs: List of probabilities for an event.
-        - mode: The mode of operation, e.g., 'Test' or 'Train'.
+        Handles the 'shift' option in the TEKG data preparation.
         
         Returns:
-        Aggregated probabilities for the event. This implementation simply takes the mean of the probabilities,
-        but you might choose a different strategy based on your application's specifics.
+        A tuple containing pattern and statistics results if option 'shift' is enabled.
         """
-        if mode == 'Train' and self.option.prob_type_for_training == 'max':
-            # For training, you might prefer the mean to smooth out the data
-            return np.max(probs)
-        else:
-            # For testing or other modes, you might choose the maximum probability to focus on the most likely event
-            return np.mean(probs)
+        if self.option.shift:
+            return self.data['pattern_ls_fkt'], self.data['stat_res_fkt']
+        return None, None
+
+
+
+    def _load_sample_data(self, sample, mode, inverse=False):
+        """
+        Load data for a sample or its inverse from the filesystem.
+        
+        Parameters:
+        - sample: The sample to load data for.
+        - mode: The mode of operation, e.g., 'Test' or 'Train'.
+        - inverse: Boolean indicating if the inverse sample data should be loaded.
+        
+        Returns:
+        Loaded data as a dictionary or None if the file does not exist.
+        """
+        cur_path = self._build_sample_path(sample, mode, inverse)
+        if os.path.exists(cur_path):
+            with open(cur_path, 'r') as file:
+                return json.load(file)
+        return {str(tuple(sample)): []}
+
+
+    def _obtain_inv_edge(self, sample):
+        """
+        Obtain the inverse edge for a given sample.
+        
+        Parameters:
+        - sample: The sample for which to find the inverse edge.
+        
+        Returns:
+        Inverse edge.
+        """
+        # Assuming the logic to obtain the inverse edge is implemented here.
+
+        sample_inv = obtain_inv_edge(np.array([sample]), self.data['num_rel']//2)[0]
+
+        return sample_inv
 
 
 
@@ -771,8 +740,59 @@ class Experiment():
 
 
 
+    def _process_sample(self, sample, mode, pattern_ls_fkt, stat_res_fkt, rel_type):
+        """
+        Processes a single sample for TEKG generation, including loading data,
+        handling inversions, and calculating probabilities.
+        
+        Parameters:
+        - sample: The current sample to process.
+        - mode: The mode of operation, e.g., 'Test' or 'Train'.
+        - pattern_ls_fkt: Pre-computed pattern list function if option 'shift' is enabled.
+        - stat_res_fkt: Pre-computed statistics results function if option 'shift' is enabled.
+        - rel_type: The type of relationship for the current sample.
+        
+        Returns:
+        A dictionary containing processed information for the sample or None if not valid.
+        """
+        
+        sample_dict = self._load_sample_data(sample, mode)
+        sample_inv_dict = self._load_sample_data(self._obtain_inv_edge(sample), mode, inverse=True)
+
+        # if not sample_dict or not sample_inv_dict:
+        #     return None
+
+        # Assuming create_inputs_v4 and other required methods are defined elsewhere within the class
+        input_edge_probs = create_inputs_v4(sample_dict, sample_inv_dict, None, self.data['pattern_ls'], self.data['timestamp_range'], 
+                                             self.data['num_rel']//2, self.data['stat_res'], mode=mode,
+                                             dataset=self.data['dataset'], file_suffix=self.file_suffix, 
+                                             flag_compression = False, flag_write = False, 
+                                             flag_time_shifting = self.option.shift,
+                                             pattern_ls_fkt = pattern_ls_fkt,
+                                             stat_res_fkt = stat_res_fkt, shift_ref_time=None, flag_rm_seen_timestamp=True)
+
+        if len(input_edge_probs) == 0:
+            return None
+
+        input_edge_probs = self._convert_format_edge_probs(input_edge_probs, sample)
+
+        flag_valid, probs, res_random_walk, num_valid_edge = self._calculate_probs_and_walks(input_edge_probs, sample, rel_type, mode)
+
+        if not flag_valid:
+            return None
+
+        ref_time = sample_dict.get('ref_time')
+        return {
+            'query_rels': [rel_type] * num_valid_edge,
+            'num_valid_edge': num_valid_edge,
+            'res_random_walk': res_random_walk,
+            'probs': probs,
+            'ref_time': ref_time
+        }
 
 
+
+class TEKG_creator(TEKG_creator_base):
     def create_TEKG_in_batch(self, idx_ls, mode):
         num_step = self.option.num_step-1
         mdb = copy.copy(self.data['mdb'])
@@ -791,16 +811,16 @@ class Experiment():
             file_path = "{}{}_train_query_{}.json".format(self.data['path'], self.data['dataset_name'], data_idx)
             with open(file_path, 'r') as f:
                 json_data = json.load(f)
-            _process_json_data(json_data, query_edges, input_intervals, batch_edges)
+            self._process_json_data(json_data, query_edges, input_intervals, batch_edges)
 
 
         if flag_use_batch_graph:
-            batch_edges = _unique_edges(batch_edges)
-            batch_edges_inv = _inverse_edges(batch_edges, self.data['num_rel'])
-            batch_edges = _unique_edges(np.vstack((batch_edges, batch_edges_inv)))  # Combine and get unique edges again
+            batch_edges = self._unique_edges(batch_edges)
+            batch_edges_inv = self._inverse_edges(batch_edges, self.data['num_rel'])
+            batch_edges = self._unique_edges(np.vstack((batch_edges, batch_edges_inv)))  # Combine and get unique edges again
             assert len(batch_edges) <= self.data['num_entity'] // 2, 'Increase num_entity or reduce edges.'
-            mdb = _build_mdb(batch_edges, self.data['num_entity'], self.data['num_rel'])
-            connectivity = _calculate_connectivity(batch_edges, self.data['num_entity'])
+            mdb = self._build_mdb(batch_edges, self.data['num_entity'], self.data['num_rel'])
+            connectivity = self._calculate_connectivity(batch_edges, self.data['num_entity'])
 
 
         if output_probs_with_ref_edges is None:
@@ -852,7 +872,7 @@ class Experiment():
         tt = [h + self.data['num_entity']//2 for h in hh]
 
 
-        ts_probs_first_event, te_probs_first_event, ts_probs_last_event, te_probs_last_event = _initialize_probabilities(
+        ts_probs_first_event, te_probs_first_event, ts_probs_last_event, te_probs_last_event = self._initialize_probabilities(
             len(idx_ls), self.data['num_entity'], num_step, self.data['timestamp_range'], mode
         )
 
@@ -870,11 +890,11 @@ class Experiment():
             ref_event_idx_ts_first, ref_event_idx_ts_last, ref_event_idx_te_first, ref_event_idx_te_last = np.zeros((self.data['num_entity'],)), np.zeros((self.data['num_entity'],)), \
                                                                                         np.zeros((self.data['num_entity'],)), np.zeros((self.data['num_entity'],))
 
-            flag_valid |= _update_event_probabilities(output_probs_with_ref_edges[data_idx]['first_event'], flag_use_batch_graph, batch_edges, 
+            flag_valid |= self._update_event_probabilities(output_probs_with_ref_edges[data_idx]['first_event'], flag_use_batch_graph, batch_edges, 
                                                             batch_edges_idx_cmp, TEKG_nodes, num_step, mode, 
                                                             ts_probs_first_event, te_probs_first_event, ref_event_idx_ts_first, ref_event_idx_te_first)
 
-            flag_valid |= _update_event_probabilities(output_probs_with_ref_edges[data_idx]['last_event'], flag_use_batch_graph, batch_edges, 
+            flag_valid |= self._update_event_probabilities(output_probs_with_ref_edges[data_idx]['last_event'], flag_use_batch_graph, batch_edges, 
                                                             batch_edges_idx_cmp, TEKG_nodes, num_step, mode, 
                                                             ts_probs_last_event, te_probs_last_event, ref_event_idx_ts_last, ref_event_idx_te_last)
 
@@ -894,34 +914,19 @@ class Experiment():
 
 
 
-    def _process_json_data(json_data, query_edges, input_intervals, batch_edges=None):
-        cur_query = json_data['query']
-        query_edges.append(cur_query)
-        input_intervals.append(cur_query[3:])
+    def _assign_probability(self, prob, prob_type, j, cur_edge_idx, step, ts_probs, te_probs):
+        if prob_type == 'ts':
+            if step is not None:
+                ts_probs[j][i][cur_edge_idx][step] = prob
+            else:
+                ts_probs[j][i][cur_edge_idx] = prob
+        elif prob_type == 'te':
+            if step is not None:
+                te_probs[j][i][cur_edge_idx][step] = prob
+            else:
+                te_probs[j][i][cur_edge_idx] = prob
 
-        if batch_edges is not None:
-            batch_edges.append(cur_query)
-            for rule_len in range(1, 6):
-                walks = json_data.get(str(rule_len), [])
-                for walk in walks:
-                    for i in range(rule_len):
-                        x = walk[4*i:4*i+5]
-                        batch_edges.append([x[j] for j in [0, 1, 4, 2, 3]])
-
-
-    def _unique_edges(edges):
-        """Return unique edges, ensuring no duplicates."""
-        return np.unique(edges, axis=0)
-
-    def _inverse_edges(edges, num_rel):
-        """Inverse the edges and adjust relation IDs for symmetry."""
-        inv_edges = edges[:, [2, 1, 0, 3, 4]]
-        mask = edges[:, 1] < num_rel // 2
-        inv_edges[mask, 1] += num_rel // 2
-        inv_edges[~mask, 1] -= num_rel // 2
-        return inv_edges
-
-    def _build_mdb(edges, num_entity, num_rel):
+    def _build_mdb(self, edges, num_entity, num_rel):
         """Build the mdb dictionary based on current relations and entities."""
         mdb = {}
         edges_idx = np.arange(len(edges))
@@ -935,7 +940,8 @@ class Experiment():
                 mdb[r + num_rel // 2] = [np.hstack([idx_cur_rel + num_entity // 2, idx_cur_rel + num_entity // 2]).tolist(), [1.0] * len(idx_cur_rel), [num_entity, num_entity]]
         return mdb
 
-    def _calculate_connectivity(batch_edges, num_entity):
+
+    def _calculate_connectivity(self, batch_edges, num_entity):
         """Calculate connectivity matrix."""
         connectivity = {key: [] for key in range(4)}
         batch_edges_idx_cmp = np.hstack((np.arange(len(batch_edges)), np.arange(len(batch_edges)) + num_entity // 2))
@@ -970,9 +976,15 @@ class Experiment():
         return connectivity
 
 
+    def _get_current_edge_index(self, edge, flag_use_batch_graph, batch_edges, batch_edges_idx_cmp, TEKG_nodes):
+        edge_transform = [edge[j] for j in [0,1,4,2,3]]
+        if flag_use_batch_graph:
+            return batch_edges_idx_cmp[batch_edges.tolist().index(edge_transform)]
+        else:
+            return TEKG_nodes.tolist().index(edge_transform)
 
 
-    def _initialize_probabilities(num_lists, num_entities, num_steps, timestamp_range, mode):
+    def _initialize_probabilities(self, num_lists, num_entities, num_steps, timestamp_range, mode):
         """
         Initialize probabilities for events.
 
@@ -1001,54 +1013,31 @@ class Experiment():
                 [base_array.tolist()] * 2, [base_array.tolist()] * 2)
 
 
+    def _inverse_edges(self, edges, num_rel):
+        """Inverse the edges and adjust relation IDs for symmetry."""
+        inv_edges = edges[:, [2, 1, 0, 3, 4]]
+        mask = edges[:, 1] < num_rel // 2
+        inv_edges[mask, 1] += num_rel // 2
+        inv_edges[~mask, 1] -= num_rel // 2
+        return inv_edges
 
 
-    def _update_event_probabilities(events, flag_use_batch_graph, batch_edges, batch_edges_idx_cmp, TEKG_nodes, num_step, mode, ts_probs, te_probs, ref_event_idx_ts, ref_event_idx_te):
-        flag_valid = 0  # Initialize flag_valid
-        for event_key, event_value in events.items():
-            for edge in event_value:
-                cur_edge_idx = _get_current_edge_index(edge, flag_use_batch_graph, batch_edges, batch_edges_idx_cmp, TEKG_nodes)
-                flag_valid |= _update_probabilities_for_edge(edge, event_value, cur_edge_idx, num_step, mode, ts_probs, te_probs, ref_event_idx_ts, ref_event_idx_te)
-        return flag_valid
+    def _process_json_data(self, json_data, query_edges, input_intervals, batch_edges=None):
+        cur_query = json_data['query']
+        query_edges.append(cur_query)
+        input_intervals.append(cur_query[3:])
 
-    def _get_current_edge_index(edge, flag_use_batch_graph, batch_edges, batch_edges_idx_cmp, TEKG_nodes):
-        edge_transform = [edge[j] for j in [0,1,4,2,3]]
-        if flag_use_batch_graph:
-            return batch_edges_idx_cmp[batch_edges.tolist().index(edge_transform)]
-        else:
-            return TEKG_nodes.tolist().index(edge_transform)
+        if batch_edges is not None:
+            batch_edges.append(cur_query)
+            for rule_len in range(1, 6):
+                walks = json_data.get(str(rule_len), [])
+                for walk in walks:
+                    for i in range(rule_len):
+                        x = walk[4*i:4*i+5]
+                        batch_edges.append([x[j] for j in [0, 1, 4, 2, 3]])
 
-    def _update_probabilities_for_edge(edge, event, cur_edge_idx, num_step, mode, ts_probs, te_probs, ref_event_idx_ts, ref_event_idx_te):
-        flag_valid = 0
-        for j in [0, 1]:
-            if self.option.flag_ruleLen_split_ver:
-                for l in range(num_step):
-                    flag_valid |= _update_probability_by_step(edge, j, l+1, cur_edge_idx, event, mode, ts_probs, te_probs)
-            else:
-                flag_valid |= _update_probability_without_step(edge, j, cur_edge_idx, event, mode, ts_probs, te_probs)
-            ref_event_idx_ts[cur_edge_idx] = 1
-            ref_event_idx_te[cur_edge_idx] = 1
-        return flag_valid
 
-    def _update_probability_by_step(edge, j, step, cur_edge_idx, event, mode, ts_probs, te_probs):
-        flag_valid = 0
-        for prob_type_key, probs_event in zip(['ts', 'te'], [0, 1]):
-            if len(event[edge][probs_event][j][step]) > 0:
-                selected_prob = _select_probability(event[edge][probs_event][j][step], mode)
-                _assign_probability(selected_prob, prob_type_key, j, cur_edge_idx, step, ts_probs, te_probs)
-                flag_valid = 1
-        return flag_valid
-
-    def _update_probability_without_step(edge, j, cur_edge_idx, event, mode, ts_probs, te_probs):
-        flag_valid = 0
-        for prob_type_key, probs_event in zip(['ts', 'te'], [0, 1]):
-            if len(event[edge][probs_event][j]) > 0:
-                selected_prob = _select_probability(event[edge][probs_event][j], mode, aggregate=True)
-                _assign_probability(selected_prob, prob_type_key, j, cur_edge_idx, None, ts_probs, te_probs)
-                flag_valid = 1
-        return flag_valid
-
-    def _select_probability(probs, mode, aggregate=False):
+    def _select_probability(self, probs, mode, aggregate=False):
         if mode == 'Train':
             if self.option.prob_type_for_training == 'max':
                 return max(probs)
@@ -1060,14 +1049,51 @@ class Experiment():
             else:
                 return np.mean(probs)
 
-    def _assign_probability(prob, prob_type, j, cur_edge_idx, step, ts_probs, te_probs):
-        if prob_type == 'ts':
-            if step is not None:
-                ts_probs[j][i][cur_edge_idx][step] = prob
+
+
+    def _unique_edges(self, edges):
+        """Return unique edges, ensuring no duplicates."""
+        return np.unique(edges, axis=0)
+
+
+
+    def _update_event_probabilities(self, events, flag_use_batch_graph, batch_edges, batch_edges_idx_cmp, TEKG_nodes, num_step, mode, ts_probs, te_probs, ref_event_idx_ts, ref_event_idx_te):
+        flag_valid = 0  # Initialize flag_valid
+        for event_key, event_value in events.items():
+            for edge in event_value:
+                cur_edge_idx = self._get_current_edge_index(edge, flag_use_batch_graph, batch_edges, batch_edges_idx_cmp, TEKG_nodes)
+                flag_valid |= self._update_probabilities_for_edge(edge, event_value, cur_edge_idx, num_step, mode, ts_probs, te_probs, ref_event_idx_ts, ref_event_idx_te)
+        return flag_valid
+
+
+    def _update_probabilities_for_edge(self, edge, event, cur_edge_idx, num_step, mode, ts_probs, te_probs, ref_event_idx_ts, ref_event_idx_te):
+        flag_valid = 0
+        for j in [0, 1]:
+            if self.option.flag_ruleLen_split_ver:
+                for l in range(num_step):
+                    flag_valid |= self._update_probability_by_step(edge, j, l+1, cur_edge_idx, event, mode, ts_probs, te_probs)
             else:
-                ts_probs[j][i][cur_edge_idx] = prob
-        elif prob_type == 'te':
-            if step is not None:
-                te_probs[j][i][cur_edge_idx][step] = prob
-            else:
-                te_probs[j][i][cur_edge_idx] = prob
+                flag_valid |= self._update_probability_without_step(edge, j, cur_edge_idx, event, mode, ts_probs, te_probs)
+            ref_event_idx_ts[cur_edge_idx] = 1
+            ref_event_idx_te[cur_edge_idx] = 1
+        return flag_valid
+
+
+    def _update_probability_by_step(self, edge, j, step, cur_edge_idx, event, mode, ts_probs, te_probs):
+        flag_valid = 0
+        for prob_type_key, probs_event in zip(['ts', 'te'], [0, 1]):
+            if len(event[edge][probs_event][j][step]) > 0:
+                selected_prob = self._select_probability(event[edge][probs_event][j][step], mode)
+                self._assign_probability(selected_prob, prob_type_key, j, cur_edge_idx, step, ts_probs, te_probs)
+                flag_valid = 1
+        return flag_valid
+
+
+    def _update_probability_without_step(self, edge, j, cur_edge_idx, event, mode, ts_probs, te_probs):
+        flag_valid = 0
+        for prob_type_key, probs_event in zip(['ts', 'te'], [0, 1]):
+            if len(event[edge][probs_event][j]) > 0:
+                selected_prob = self._select_probability(event[edge][probs_event][j], mode, aggregate=True)
+                self._assign_probability(selected_prob, prob_type_key, j, cur_edge_idx, None, ts_probs, te_probs)
+                flag_valid = 1
+        return flag_valid
