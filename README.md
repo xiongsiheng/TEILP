@@ -73,12 +73,13 @@ python main_rule_learning_timestamp_dataset.py --dataset {$dataset name} --test 
 
 ## Citation
 ```
-@misc{xiong2023teilp,
-      title={TEILP: Time Prediction over Knowledge Graphs via Logical Reasoning}, 
-      author={Siheng Xiong and Yuan Yang and Ali Payani and James C Kerce and Faramarz Fekri},
-      year={2023},
-      eprint={2312.15816},
-      archivePrefix={arXiv},
-      primaryClass={cs.CL}
+@inproceedings{xiong2024teilp,
+  title={Teilp: Time prediction over knowledge graphs via logical reasoning},
+  author={Xiong, Siheng and Yang, Yuan and Payani, Ali and Kerce, James C and Fekri, Faramarz},
+  booktitle={Proceedings of the AAAI Conference on Artificial Intelligence},
+  volume={38},
+  number={14},
+  pages={16112--16119},
+  year={2024}
 }
 ```
