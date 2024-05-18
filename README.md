@@ -13,7 +13,7 @@ This is a follow-up work of [TILP: Differentiable Learning of Temporal Logical R
 </p>
 
 
-## How to run
+## Quick Start
 
 The structure of the file folder should be like
 
@@ -70,6 +70,9 @@ Rule application:
 python main_rule_application_timestamp_dataset.py --dataset {$dataset name}
 python main_rule_learning_timestamp_dataset.py --dataset {$dataset name} --test --from_model_ckpt {$your_model_location}
 ```
+
+## Contact
+If you have any inquiries, please feel free to raise an issue or reach out to sxiong45@gatech.edu.
 
 ## Citation
 ```
