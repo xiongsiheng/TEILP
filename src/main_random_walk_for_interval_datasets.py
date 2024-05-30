@@ -124,17 +124,17 @@ if not os.path.exists('../output/'):
     os.mkdir('../output/')
 
 
-random_walk(targ_rel_ls, edges, para_ls_for_walker, pos_examples_idx = pos_examples_idx, time_shift_mode=flag_time_shift, output_path=output_path,
-                         ratio=ratio, imbalanced_rel=imbalanced_rel, exp_idx=exp_idx)
+# random_walk(targ_rel_ls, edges, para_ls_for_walker, pos_examples_idx = pos_examples_idx, time_shift_mode=flag_time_shift, output_path=output_path,
+#                          ratio=ratio, imbalanced_rel=imbalanced_rel, exp_idx=exp_idx)
 
 
-output = convert_walks_into_rules(dataset=dataset_using, path='../output/' + output_path, idx_ls=pos_examples_idx, 
-                                      flag_time_shift=flag_time_shift, flag_biased=flag_biased, flag_few_training=flag_few_training,
-                                      ratio=ratio, imbalanced_rel=imbalanced_rel, exp_idx=exp_idx)
+# output = convert_walks_into_rules(dataset=dataset_using, path='../output/' + output_path, idx_ls=pos_examples_idx, 
+#                                       flag_time_shift=flag_time_shift, flag_biased=flag_biased, flag_few_training=flag_few_training,
+#                                       ratio=ratio, imbalanced_rel=imbalanced_rel, exp_idx=exp_idx)
 
 
-
-
+with open('/home/sxiong45/code/TEILP/output/YAGO/YAGO_stat_res.json', 'r') as file:
+    output = json.load(file)
 
 stat_res_path = '../output/' + dataset_using
 
@@ -152,7 +152,9 @@ if flag_biased:
 if flag_time_shift:
     stat_res_path += '_time_shifting'
 
-stat_res_path += "_stat_res.json"
 
-with open(stat_res_path, "w") as f:
-    json.dump(output, f)
+stat_res_path += "_stat_res_"
+
+for rel in output:
+    with open(stat_res_path + 'rel_' + str(rel) + '.json', "w") as f:
+        json.dump(output[rel], f)

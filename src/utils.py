@@ -1780,24 +1780,29 @@ def convert_walks_into_rules(path, dataset, idx_ls=None, with_ref_end_time=True,
 
 
 def processing_stat_res(dataset, num_rel, flag_with_ref_end_time=False, flag_time_shifting=0):
-    if not flag_time_shifting:
-        with open('../output/' + dataset + '/' + dataset + "_stat_res.json", "r") as f:
-            stat_res = json.load(f)
-    else:
-        with open('../output/' + dataset + '/' + dataset + "_time_shifting_stat_res.json", "r") as f:
-            stat_res = json.load(f)
+    # if not flag_time_shifting:
+    #     with open('../output/' + dataset + '/' + dataset + "_stat_res.json", "r") as f:
+    #         stat_res = json.load(f)
+    # else:
+    #     with open('../output/' + dataset + '/' + dataset + "_time_shifting_stat_res.json", "r") as f:
+    #         stat_res = json.load(f)
 
     pattern_ls = {}
     ts_stat_ls = {}
     te_stat_ls = {}
 
     for i in range(num_rel):
-        pattern_ls[i] = []
-        ts_stat_ls[i] = []
-        te_stat_ls[i] = []
+        path = '../output/' + dataset + '/' + dataset
+        path += "_time_shifting_" if flag_time_shifting else "_"
+        path += "stat_res_rel_" + str(i) + ".json"
+        
+        with open(path, "r") as f:
+            stat_res = json.load(f)
 
-        for rule in stat_res[str(i)]:
-            if len(stat_res[str(i)][rule].keys()) == 0:
+        pattern_ls[i], ts_stat_ls[i], te_stat_ls[i] = [], [], []
+
+        for rule in stat_res:
+            if len(stat_res[rule].keys()) == 0:
                 continue
 
             pattern_ls[i].append(rule)
@@ -1809,15 +1814,14 @@ def processing_stat_res(dataset, num_rel, flag_with_ref_end_time=False, flag_tim
             
             cur_ts_stat_ls = []
             for k in k_ls:
-                if k in stat_res[str(i)][rule]:
-                    cur_ts_stat_ls.append(stat_res[str(i)][rule][k][0]) # mean
-                    cur_ts_stat_ls.append(max(5, stat_res[str(i)][rule][k][1])) # variance
+                if k in stat_res[rule]:
+                    cur_ts_stat_ls.append(stat_res[rule][k][0]) # mean
+                    cur_ts_stat_ls.append(max(5, stat_res[rule][k][1])) # variance
                 else:
                     cur_ts_stat_ls.append(9999)
                     cur_ts_stat_ls.append(9999)
 
             ts_stat_ls[i].append(cur_ts_stat_ls)
-
 
 
             if not flag_with_ref_end_time:
@@ -1827,9 +1831,9 @@ def processing_stat_res(dataset, num_rel, flag_with_ref_end_time=False, flag_tim
 
             cur_te_stat_ls = []
             for k in k_ls:
-                if k in stat_res[str(i)][rule]:
-                    cur_te_stat_ls.append(stat_res[str(i)][rule][k][0])
-                    cur_te_stat_ls.append(max(5, stat_res[str(i)][rule][k][1]))
+                if k in stat_res[rule]:
+                    cur_te_stat_ls.append(stat_res[rule][k][0])
+                    cur_te_stat_ls.append(max(5, stat_res[rule][k][1]))
                 else:
                     cur_te_stat_ls.append(9999)
                     cur_te_stat_ls.append(9999)
