@@ -88,7 +88,7 @@ class Experiment():
                 else:
                     run_fn = self.learner.predict
             
-            self.data['random_walk_res'] = create_TEKG_in_batch(self.option, self.data, batch_idx_ls, mode)
+            # self.data['random_walk_res'] = create_TEKG_in_batch(self.option, self.data, batch_idx_ls, mode)
 
             if self.option.flag_acceleration:
                 qq, query_rels, refNode_source, res_random_walk, probs, valid_sample_idx, input_intervals, input_samples, ref_time_ls = model.create_graph(batch_idx_ls, mode)
