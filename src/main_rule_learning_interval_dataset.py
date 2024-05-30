@@ -146,9 +146,9 @@ def main():
     print("Learner built.")
 
     data['random_walk_res'] = None
-    # if option.train:
-    #     data['random_walk_res'] = prepare_graph_random_walk_res(option, data, 'Train')
-    #     print('Data preprocessed.')
+    if option.train:
+        data['random_walk_res'] = prepare_graph_random_walk_res(option, data, 'Train')
+        print('Data preprocessed.')
 
 
     saver = tf.train.Saver(max_to_keep=option.max_epoch)
