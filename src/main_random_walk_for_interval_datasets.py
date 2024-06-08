@@ -6,7 +6,7 @@ import json
 
 from dataset_setting import obtain_dataset
 from do_random_walk import random_walk
-from utils import convert_walks_into_rules
+from utlis import *
 
 
 parser = argparse.ArgumentParser()
@@ -75,7 +75,7 @@ else:
 
 
 
-para_ls_for_walker = [num_rel, num_pattern, num_ruleLen, dataset_using, f_interval]
+paras = [num_rel, num_pattern, num_ruleLen, dataset_using, f_interval]
 targ_rel_ls = range(num_rel)
 if imbalanced_rel is not None:
     targ_rel_ls = [imbalanced_rel]
@@ -88,7 +88,8 @@ if targ_rel is not None:
 train_edges, valid_data, valid_data_inv, test_data, test_data_inv = obtain_dataset(dataset_name1, num_rel)
 
 
-# mask valid / test data time
+# mask valid/test data
+# we use 9999 as unknown value notation (normal (year) values are like 1800, 1923, 2017, etc.)
 if not flag_time_shift:
     if f_interval:
         valid_data[:, [3,4]] = 9999
@@ -107,7 +108,7 @@ num_test = len(test_data)
 
 
 edges = np.vstack([train_edges[:len(train_edges)//2], valid_data, test_data,
-                        train_edges[len(train_edges)//2:], valid_data_inv, test_data_inv])
+                   train_edges[len(train_edges)//2:], valid_data_inv, test_data_inv])
 
 
 pos_examples_idx = None
@@ -124,37 +125,40 @@ if not os.path.exists('../output/'):
     os.mkdir('../output/')
 
 
-# random_walk(targ_rel_ls, edges, para_ls_for_walker, pos_examples_idx = pos_examples_idx, time_shift_mode=flag_time_shift, output_path=output_path,
-#                          ratio=ratio, imbalanced_rel=imbalanced_rel, exp_idx=exp_idx)
 
 
-# output = convert_walks_into_rules(dataset=dataset_using, path='../output/' + output_path, idx_ls=pos_examples_idx, 
-#                                       flag_time_shift=flag_time_shift, flag_biased=flag_biased, flag_few_training=flag_few_training,
-#                                       ratio=ratio, imbalanced_rel=imbalanced_rel, exp_idx=exp_idx)
+random_walk(targ_rel_ls, edges, paras, pos_examples_idx = pos_examples_idx, 
+            time_shift_mode=flag_time_shift, output_path=output_path,
+            ratio=ratio, imbalanced_rel=imbalanced_rel, exp_idx=exp_idx, num_processes=24)
 
 
-with open('/home/sxiong45/code/TEILP/output/YAGO/YAGO_stat_res.json', 'r') as file:
-    output = json.load(file)
-
-stat_res_path = '../output/' + dataset_using
-
-if not os.path.exists(stat_res_path):
-    os.mkdir(stat_res_path)
-
-stat_res_path += '/' + dataset_using
-if flag_few_training:
-    stat_res_path += '_ratio_' + str(ratio)
-if flag_biased:
-    if imbalanced_rel is None:
-        stat_res_path += '_balanced'
-    else:
-        stat_res_path += '_imbalanced_rel_' + str(imbalanced_rel)
-if flag_time_shift:
-    stat_res_path += '_time_shifting'
 
 
-stat_res_path += "_stat_res_"
+def create_stat_res_path(dataset_using, flag_few_training=False, ratio=None, flag_biased=False, imbalanced_rel=None, flag_time_shift=False):
+    # create the path for the stat res
+    stat_res_path = '../output/' + dataset_using
+    if not os.path.exists(stat_res_path):
+        os.mkdir(stat_res_path)
 
-for rel in output:
-    with open(stat_res_path + 'rel_' + str(rel) + '.json', "w") as f:
-        json.dump(output[rel], f)
+    stat_res_path += '/' + dataset_using
+    if flag_few_training:
+        stat_res_path += '_ratio_' + str(ratio)
+    if flag_biased:
+        if imbalanced_rel is None:
+            stat_res_path += '_balanced'
+        else:
+            stat_res_path += '_imbalanced_rel_' + str(imbalanced_rel)
+    if flag_time_shift:
+        stat_res_path += '_time_shifting'
+
+    stat_res_path += "_stat_res"
+    return stat_res_path
+
+
+stat_res_path = create_stat_res_path(dataset_using, flag_few_training, ratio, flag_biased, imbalanced_rel, flag_time_shift)
+
+summarizer = Rule_summarizer()
+summarizer.convert_walks_into_rules(dataset=dataset_using, path='../output/' + output_path, idx_ls=pos_examples_idx, 
+                        flag_time_shift=flag_time_shift, flag_biased=flag_biased, flag_few_training=flag_few_training,
+                        ratio=ratio, imbalanced_rel=imbalanced_rel, exp_idx=exp_idx, 
+                        targ_rel_ls=targ_rel_ls, num_processes=20, stat_res_path=stat_res_path)

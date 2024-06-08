@@ -1,6 +1,6 @@
 import numpy as np 
 import tensorflow as tf
-from utils import *
+from utlis import *
 
 
 
@@ -68,12 +68,40 @@ class Learner(object):
         init_matrix = np.array(map(lambda row: row / np.linalg.norm(row), init_matrix))
         return init_matrix
 
+
     def _clip_if_not_None(self, g, v, low, high):
         if g is not None:
             return (tf.clip_by_value(g, low, high), v)
         else:
             return (g, v)
-    
+
+
+    def _attn_normalization(self, attn, sample_indices):
+        '''
+        Normalize the attention weights (Important!)
+
+        Parameters:
+            attn: attention weights, shape: (num_rules_total, 1)
+            sample_indices: sample indices, shape: (num_samples, num_rules_total)
+                            [[1, 0, 0, 0, 0],   # rule 1 from sample 1
+                             [0, 1, 1, 0, 0],   # rule 2, 3 from sample 2
+                             [0, 0, 0, 1, 1]]   # rule 4, 5 from sample 3
+
+        Returns:
+            normalized_attn: normalized attention weights, shape: (num_rules_total, 1)
+        '''
+        attn = tf.reshape(attn, (1, -1))
+        # Compute sum of attn for each sample
+        sample_sums = tf.reduce_sum(sample_indices*attn, axis=1) + 1e-20 # shape: (num_samples, )
+
+        # Normalize attn
+        normalized_attn = (sample_indices*attn) / tf.expand_dims(sample_sums, axis=1)
+        normalized_attn = tf.reduce_sum(normalized_attn, axis=0)
+
+        normalized_attn = tf.reshape(normalized_attn, (-1, 1))
+        return normalized_attn
+
+
     def _build_input(self):
         self.tails = tf.placeholder(tf.int32, [None])
         self.heads = tf.placeholder(tf.int32, [None])
@@ -282,18 +310,18 @@ class Learner(object):
 
         self.optimizer = tf.train.AdamOptimizer()
         gvs = self.optimizer.compute_gradients(tf.reduce_mean(self.final_loss))
-        capped_gvs = map(lambda (grad, var): self._clip_if_not_None(grad, var, -10., 10.), gvs) 
-        self.optimizer_step = self.optimizer.apply_gradients(capped_gvs)
-
+        # capped_gvs = map(lambda (grad, var): self._clip_if_not_None(grad, var, -10., 10.), gvs) 
+        # self.optimizer_step = self.optimizer.apply_gradients(capped_gvs)
+        self.optimizer_step = self.optimizer.apply_gradients(gvs)
 
 
     def _build_graph_acc_ver(self):
         '''
         Use shallow layers only to accelerate the training process.
         '''
-        self.query_rels = tf.placeholder(tf.int32, [None])   # dummy
-        self.refNode_source = tf.placeholder(tf.float32, [None, None])  # show where the refNode comes from
-        self.res_random_walk = tf.placeholder(tf.float32, [None, self.num_rule])  # dummy
+        self.query_rels = tf.placeholder(tf.int32, [None])   # (dummy_batch_size)
+        self.refNode_source = tf.placeholder(tf.float32, [None, None])  # show where the refNode comes from (batch_size, num_rule)
+        self.res_random_walk = tf.placeholder(tf.float32, [None, self.num_rule])  # (dummy_batch_size, num_rule)
 
         if self.flag_ruleLen_split:
             # [tqs, tqe] X [last_event, first_event] X [ts, te]
@@ -304,13 +332,13 @@ class Learner(object):
 
         self.attn_rule_embed = tf.Variable(np.random.randn(self.num_query, self.num_rule),  dtype=tf.float32)
         attn_rule = tf.nn.embedding_lookup(self.attn_rule_embed, self.query_rels)
-        attn_rule = tf.nn.softmax(attn_rule, axis=1)
+        attn_rule = tf.nn.softmax(attn_rule, axis=1)  # shape: (dummy_batch_size, num_rule)
         self.attn_rule = attn_rule
 
         # [tqs, tqe] X [(last_ts, last_te), (first_ts, first_te), (first_event, last_event)]
         self.attn_refType_embed = [tf.Variable(self._random_uniform_unit(self.num_query, 2), dtype=tf.float32)]*3*(int(self.flag_int)+1)
         attn_refType = [tf.nn.embedding_lookup(embed, self.query_rels) for embed in self.attn_refType_embed]
-        attn_refType = [tf.nn.softmax(x, axis=1) for x in attn_refType]
+        attn_refType = [tf.nn.softmax(x, axis=1) for x in attn_refType] # each element (dummy_batch_size, 2)
 
         if self.flag_ruleLen_split:
             refNode_probs_mat = self.res_random_walk * attn_rule
@@ -327,23 +355,26 @@ class Learner(object):
                     pred_refNode += refNode_probs[l] * probs_from_refNode[l]
 
                 self.pred.append(tf.matmul(self.refNode_source, pred_refNode))
-
+                
         else:
-            refNode_probs = tf.reduce_sum(self.res_random_walk * attn_rule, axis=1, keep_dims=True)
+            refNode_attn = tf.reduce_sum(self.res_random_walk * attn_rule, axis=1, keep_dims=True)
             
             self.pred = []
             for i in range(int(self.flag_int)+1):
                 probs_from_refNode = attn_refType[3*i+2][:, 0:1] * (attn_refType[3*i][:, 0:1] * self.probs[:,4*i,:] + attn_refType[3*i][:, 1:2] * self.probs[:,4*i+1,:]) + \
                                      attn_refType[3*i+2][:, 1:2] * (attn_refType[3*i+1][:, 0:1]*self.probs[:,4*i+2,:] + attn_refType[3*i+1][:, 1:2] * self.probs[:,4*i+3,:])
-                self.pred.append(tf.matmul(self.refNode_source, refNode_probs * probs_from_refNode))
+                norm = attn_refType[3*i+2][:, 0:1] * (attn_refType[3*i][:, 0:1] + attn_refType[3*i][:, 1:2]) + attn_refType[3*i+2][:, 1:2] * (attn_refType[3*i+1][:, 0:1] + attn_refType[3*i+1][:, 1:2])
+                probs_from_refNode /= norm
+                self.pred.append(tf.matmul(self.refNode_source, refNode_attn * probs_from_refNode) / tf.matmul(self.refNode_source, refNode_attn))
 
         self.final_loss = -tf.reduce_sum(tf.log(tf.maximum(self.pred[0], self.thr)), 1)
         self.final_loss += -tf.reduce_sum(tf.log(tf.maximum(self.pred[1], self.thr)), 1) if self.flag_int else 0
 
         self.optimizer = tf.train.AdamOptimizer()
         gvs = self.optimizer.compute_gradients(tf.reduce_mean(self.final_loss))
-        capped_gvs = map(lambda (grad, var): self._clip_if_not_None(grad, var, -10., 10.), gvs)
-        self.optimizer_step = self.optimizer.apply_gradients(capped_gvs)
+        # capped_gvs = map(lambda (grad, var): self._clip_if_not_None(grad, var, -10., 10.), gvs)
+        # self.optimizer_step = self.optimizer.apply_gradients(capped_gvs)
+        self.optimizer_step = self.optimizer.apply_gradients(gvs)
 
 
 

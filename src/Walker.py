@@ -53,8 +53,8 @@ class Walker(object):
 
             cur_path += '.json'
 
-            if os.path.exists(cur_path):
-                continue
+            # if os.path.exists(cur_path):
+            #     continue
 
             if isinstance(rel_idx, int):
                 if not train_edges[idx][1] == rel_idx:

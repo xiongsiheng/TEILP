@@ -7,8 +7,7 @@ import tensorflow as tf
 import numpy as np
 from model import Learner
 from experiment import Experiment
-from utils import *
-
+from gadgets import *
 
 
 
@@ -48,109 +47,18 @@ def main():
     option.flag_use_dur = False
     option.flag_state_vec_enhancement = False
     option.prob_type_for_training = ['max', 'mean'][0]
-    if option.dataset == 'YAGO':
-        option.max_epoch = 80
-
+ 
 
     os.environ["CUDA_VISIBLE_DEVICES"] = option.gpu
     tf.logging.set_verbosity(tf.logging.ERROR)
 
-
-    data = {}
-    dataset_index = ['wiki', 'YAGO'].index(option.dataset)
-
-    data['path'] = '../output/walk_res/'
-    if option.shift:
-        data['path'] = '../output/walk_res_time_shift/'
-
-    data['dataset'] = ['WIKIDATA12k', 'YAGO11k'][dataset_index]
-    if option.shift:
-        data['dataset'] = 'difficult_settings/' + data['dataset'] + '_time_shifting'
-
-    data['dataset_name'] = ['wiki', 'YAGO'][dataset_index]
-
-    data['num_rel'] = [48, 20][dataset_index]
-    data['num_entity'] = [40000, 40000][dataset_index]
-    data['num_TR'] = 4
-
-    data['train_edges'], data['valid_edges'], data['test_edges'] = obtain_all_data(data['dataset'], shuffle_train_set=False)
-
-    data['timestamp_range'] = [np.arange(-3, 2024, 1), np.arange(-431, 2024, 1)][dataset_index]
-    num_rel = data['num_rel']//2
-    if option.shift:
-        num_rel = data['num_rel'] # known time range change
-    
-    data['pattern_ls'], data['ts_stat_ls'], data['te_stat_ls'] = processing_stat_res(data['dataset_name'], num_rel, 
-                                                                                     flag_with_ref_end_time=True, flag_time_shifting=option.shift)
-
-    # print(data['pattern_ls'])
-    # print(data['ts_stat_ls'])
-    # print(data['te_stat_ls'])
-    # sys.exit()
-
-    data['num_samples_dist'] = [[32497, 4062, 4062], [16408, 2050, 2051]][dataset_index]
-    data['train_idx_ls'] = list(range(data['num_samples_dist'][0]))
-    data['valid_idx_ls'] = list(range(data['num_samples_dist'][0], data['num_samples_dist'][0] + data['num_samples_dist'][1]))
-    data['test_idx_ls'] = list(range(data['num_samples_dist'][0] + data['num_samples_dist'][1], np.sum(data['num_samples_dist'])))
-
-    if option.shift:
-        data['train_idx_ls'] = [idx + np.sum(data['num_samples_dist']) for idx in data['train_idx_ls']]
-        data['valid_idx_ls'] = [idx + np.sum(data['num_samples_dist']) for idx in data['valid_idx_ls']]
-        data['test_idx_ls'] = [idx + np.sum(data['num_samples_dist']) for idx in data['test_idx_ls']]
-
-    # print(data['train_idx_ls'])
-    # print(data['valid_idx_ls'])
-    # print(data['test_idx_ls'])
-
-    data['rel_ls_no_dur'] = [[4, 16, 17, 20], [0, 7]][dataset_index]
-
-    # todo: shift mode
-    with open('../data/'+ data['dataset_name'] +'_time_pred_eval_rm_idx.json', 'r') as file:
-        data['rm_ls'] = json.load(file)
-    if option.shift:
-        with open('../data/'+ data['dataset_name'] +'_time_pred_eval_rm_idx_shift_mode.json', 'r') as file:
-            data['rm_ls'] = json.load(file)
-
-    if option.flag_acceleration:
-        data['mdb'], data['connectivity'], data['TEKG_nodes'] = None, None, None
-    else:
-        data['mdb'], data['connectivity'], data['TEKG_nodes'], data['num_entity'] = prepare_whole_TEKG_graph(data)
-
-    # todo
-    if option.flag_use_dur:
-        with open("../output/"+ data['dataset_name'] + "_dur_preds.json", "r") as json_file:
-            data['pred_dur'] = json.load(json_file)
-
-    print("Data prepared.")
-
-
-    option.this_expsdir = os.path.join(option.exps_dir, data['dataset_name'] + '_' + option.tag)
-    if not os.path.exists(option.this_expsdir):
-        os.makedirs(option.this_expsdir)
-    option.ckpt_dir = os.path.join(option.this_expsdir, "ckpt")
-    if not os.path.exists(option.ckpt_dir):
-        os.makedirs(option.ckpt_dir)
-    option.model_path = os.path.join(option.ckpt_dir, "model")
-
-
-    option.num_step = [4, 6][dataset_index]
-    option.num_rule = [1000, 6000][dataset_index]
-    option.flag_interval = True
-
-    option.savetxt = option.this_expsdir + '/intermediate_res.txt'
-    option.save()
-
-    print("Option saved.")
+    processor = Data_preprocessor()
+    data = processor.prepare_data(option)
 
     learner = Learner(option, data)
     print("Learner built.")
 
-    data['random_walk_res'] = None
-    if option.train:
-        data['random_walk_res'] = prepare_graph_random_walk_res(option, data, 'Train')
-        print('Data preprocessed.')
-
-
+    
     saver = tf.train.Saver(max_to_keep=option.max_epoch)
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = False
@@ -176,7 +84,7 @@ def main():
 
 
         if option.test:
-            eval_aeIOU, eval_TAC, eval_MAE = experiment.test()
+            eval_aeIOU, eval_TAC, _ = experiment.test()
             res = {'aeIOU': np.mean(eval_aeIOU), 'TAC': np.mean(eval_TAC)}
             print('aeIOU: ', np.mean(eval_aeIOU))
             print('TAC: ', np.mean(eval_TAC))

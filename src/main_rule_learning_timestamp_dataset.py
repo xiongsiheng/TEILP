@@ -20,20 +20,8 @@ def main():
     parser.add_argument('--test', default=False, action="store_true")
     parser.add_argument('--from_model_ckpt', default=None, type=str)
     parser.add_argument('--dataset', default=None, type=str)
-    parser.add_argument('--num_step', default=3, type=int)
-    parser.add_argument('--num_layer', default=1, type=int)
-    parser.add_argument('--rnn_state_size', default=128, type=int)
-    parser.add_argument('--query_embed_size', default=128, type=int)
-    parser.add_argument('--batch_size', default=64, type=int)
-    parser.add_argument('--print_per_batch', default=3, type=int)
     parser.add_argument('--max_epoch', default=30, type=int)
     parser.add_argument('--min_epoch', default=5, type=int)
-    parser.add_argument('--learning_rate', default=0.001, type=float)
-    parser.add_argument('--no_norm', default=False, action="store_true")
-    parser.add_argument('--thr', default=1e-20, type=float)
-    parser.add_argument('--dropout', default=0., type=float)
-    parser.add_argument('--accuracy', default=False, action="store_true")
-    parser.add_argument('--top_k', default=10, type=int)
     parser.add_argument('--shift', default=0, type=int)
 
 
@@ -42,15 +30,14 @@ def main():
     option.tag = time.strftime("%y-%m-%d-%H-%M")
     option.exps_dir = '../exps/'
     option.seed = 33
-    option.different_states_for_rel_and_TR = False
-    option.flag_acceleration = True
-    option.flag_ruleLen_split_ver = False
-    option.flag_use_dur = False
-    option.flag_state_vec_enhancement = False
-    option.prob_type_for_training = ['max', 'mean'][0]
+    option.diff_states_for_rel_and_TR = False  # different entries of states in RNN for relations and temporal relations
+    option.flag_acc = True   # acceleration (only shallow layers are used)
+    option.flag_ruleLen_split_ver = False  # learn the rules with different lengths separately (Todo: fix issues)
+    option.flag_use_dur = False  # use duration information (Todo: fix issues)
+    option.flag_state_vec_enhance = False
+    option.prob_type_for_train = ['max', 'mean'][0]  # given a rule, the probability of the rule is the max or mean of the probabilities of the samples
 
     os.environ["CUDA_VISIBLE_DEVICES"] = option.gpu
-
 
 
     data = {}

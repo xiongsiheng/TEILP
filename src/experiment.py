@@ -1,11 +1,9 @@
 import sys
 import os
 import time
-import pickle
-from collections import Counter
 import numpy as np
-import itertools
-from utils import *
+from tqdm import tqdm
+from utlis import *
 from Graph import *
 
 
@@ -54,7 +52,7 @@ class Experiment():
                 test_idx_ls = self.data['test_idx_ls']
             idx_ls = split_list_into_batches(test_idx_ls, batch_size)
 
-        save_data(self.option.savetxt, len(idx_ls))
+        # save_data(self.option.savetxt, len(idx_ls))
 
         timestamp_range = self.data['timestamp_range']
 
@@ -76,7 +74,7 @@ class Experiment():
             model = TEKG(self.option, self.data)
 
 
-        for (i, batch_idx_ls) in enumerate(idx_ls):
+        for i, batch_idx_ls in enumerate(tqdm(idx_ls, desc=mode)):
             if self.option.flag_acceleration:
                 if mode == "Train":
                     run_fn = self.learner.update_acc
@@ -87,34 +85,41 @@ class Experiment():
                     run_fn = self.learner.update
                 else:
                     run_fn = self.learner.predict
-            
-            # self.data['random_walk_res'] = create_TEKG_in_batch(self.option, self.data, batch_idx_ls, mode)
+
 
             if self.option.flag_acceleration:
                 qq, query_rels, refNode_source, res_random_walk, probs, valid_sample_idx, input_intervals, input_samples, ref_time_ls = model.create_graph(batch_idx_ls, mode)
             else:
                 qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, valid_ref_event_idx, input_intervals, input_samples = model.create_graph(batch_idx_ls, mode)
 
-            probs = np.array(probs).transpose(1, 0, 2)
+            # save_data(self.option.savetxt, 'TEKG_prepared!')
 
-            save_data(self.option.savetxt, 'TEKG_prepared!')
-            input_intervals = np.array(input_intervals)
+            # print(len(valid_sample_idx))
 
             if len(valid_sample_idx) == 0:
                 continue
+
+            probs = np.array(probs).transpose(1, 0, 2)
+            # print(probs.shape)
+
+            input_intervals = np.array(input_intervals)
+
+            # print(probs)
+            # print(ref_time_ls)
+
 
             if self.option.flag_acceleration:
                 output = run_fn(self.sess, query_rels, refNode_source, res_random_walk, probs)
             else:
                 output = run_fn(self.sess, qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, valid_ref_event_idx)
 
-            save_data(self.option.savetxt, 'model processed!')
+            # save_data(self.option.savetxt, 'model processed!')
+            # print(output)
 
             if mode == "Train":
                 epoch_loss += list(output)
-                save_data(self.option.savetxt, i)
-                save_data(self.option.savetxt, output)
-
+                # save_data(self.option.savetxt, i)
+                # save_data(self.option.savetxt, output)
             else:
                 prob_ts = output[0].reshape(-1)
                 prob_ts = np.array(split_list_into_batches(prob_ts, len(timestamp_range)))
@@ -129,14 +134,14 @@ class Experiment():
                         cur_prob_ts[seen_ts] = 0
                         pred_ts = timestamp_range[np.argmax(cur_prob_ts)]
                         preds.append(pred_ts)
-
                     preds = np.array(preds).reshape((-1, 1))
-
                 else:
                     pred_ts = timestamp_range[np.argmax(prob_ts, axis=1)].reshape((-1, 1))
                     preds = pred_ts.copy()
 
-
+                # print(timestamp_range)
+                # print(np.argmax(prob_ts, axis=1))
+                # print(timestamp_range[np.argmax(prob_ts, axis=1)])
 
                 if self.option.flag_interval:
                     prob_te = output[1].reshape(-1)
@@ -154,6 +159,9 @@ class Experiment():
 
                     preds = np.hstack([pred_ts, pred_te])
 
+                    # print(preds)
+                    # print(valid_sample_idx)
+                    # print(input_intervals[valid_sample_idx])
 
                     if self.data['rel_ls_no_dur'] is not None:
                         qq = np.array(qq)[valid_sample_idx]
@@ -162,21 +170,27 @@ class Experiment():
                         preds[np.isin(qq, self.data['rel_ls_no_dur'])] = np.hstack((x_tmp, x_tmp))
 
 
-                save_data(self.option.savetxt, i)
-                save_data(self.option.savetxt, preds)
-                save_data(self.option.savetxt, input_intervals[valid_sample_idx])
+                # save_data(self.option.savetxt, i)
+                # save_data(self.option.savetxt, preds)
+                # save_data(self.option.savetxt, input_intervals[valid_sample_idx])
 
 
                 if 'aeIOU' in self.metrics:
                     epoch_eval_aeIOU += obtain_aeIoU(preds, input_intervals[valid_sample_idx])
+                    # print(obtain_aeIoU(preds, input_intervals[valid_sample_idx]))
 
                 if 'TAC' in self.metrics:
                     epoch_eval_TAC += obtain_TAC(preds, input_intervals[valid_sample_idx])
-                    
+                    # print(obtain_TAC(preds, input_intervals[valid_sample_idx]))
+
                 if 'MAE' in self.metrics:
                     # preds = np.array(ref_time_ls)
                     epoch_eval_MAE += np.abs(np.array(preds).reshape(-1) - input_intervals[valid_sample_idx].reshape(-1)).tolist()
-                    
+                    # print(np.abs(np.array(preds).reshape(-1) - input_intervals[valid_sample_idx].reshape(-1)).tolist())
+                    # print(preds.reshape(-1), input_intervals[valid_sample_idx].reshape(-1))
+                    # print(np.abs(np.array(ref_time_ls).reshape(-1) - input_intervals[valid_sample_idx].reshape(-1)).tolist())
+                    # print(np.array(ref_time_ls).reshape(-1), input_intervals[valid_sample_idx].reshape(-1))
+            # print('----------------------------')
 
         if mode == "Train":
             if len(epoch_loss) == 0:
@@ -186,7 +200,7 @@ class Experiment():
                     % (self.epoch+1, mode, np.mean(epoch_loss)))
             save_data(self.option.savetxt, msg)
             self.log_file.write(msg + "\n")
-
+            print("Epoch %d mode %s Loss %0.4f " % (self.epoch+1, mode, np.mean(epoch_loss)))
             return epoch_loss
 
         else:

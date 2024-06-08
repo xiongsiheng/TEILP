@@ -1,0 +1,924 @@
+import os
+import json
+import numpy as np
+from joblib import Parallel, delayed
+from tqdm import tqdm
+import copy
+import random
+from utlis import *
+
+
+
+
+class Data_preprocessor():
+    def prepare_data(self, option):
+        data = {}
+        dataset_index = ['wiki', 'YAGO'].index(option.dataset)
+
+        data['path'] = '../output/walk_res/' if not option.shift else '../output/walk_res_time_shift/'
+        
+        data['dataset'] = ['WIKIDATA12k', 'YAGO11k'][dataset_index]
+        if option.shift:
+            data['dataset'] = 'difficult_settings/' + data['dataset'] + '_time_shifting'
+
+        data['dataset_name'] = ['wiki', 'YAGO'][dataset_index]
+
+        data['num_rel'] = [48, 20][dataset_index]
+        data['num_entity'] = [40000, 40000][dataset_index]
+        data['num_TR'] = 4
+
+        data['train_edges'], data['valid_edges'], data['test_edges'] = self.obtain_all_data(data['dataset'], shuffle_train_set=False)
+
+        data['timestamp_range'] = [np.arange(-3, 2024, 1), np.arange(-431, 2024, 1)][dataset_index]
+        num_rel = data['num_rel']//2
+        if option.shift:
+            num_rel = data['num_rel'] # known time range change
+        
+        data['pattern_ls'], data['ts_stat_ls'], data['te_stat_ls'] = self.processing_stat_res(data['dataset_name'], num_rel, flag_time_shifting=option.shift)
+
+
+        data['num_samples_dist'] = [[32497, 4062, 4062], [16408, 2050, 2051]][dataset_index]
+        data['train_idx_ls'] = list(range(data['num_samples_dist'][0]))
+        data['valid_idx_ls'] = list(range(data['num_samples_dist'][0], data['num_samples_dist'][0] + data['num_samples_dist'][1]))
+        data['test_idx_ls'] = list(range(data['num_samples_dist'][0] + data['num_samples_dist'][1], np.sum(data['num_samples_dist'])))
+
+        if option.shift:
+            data['train_idx_ls'] = [idx + np.sum(data['num_samples_dist']) for idx in data['train_idx_ls']]
+            data['valid_idx_ls'] = [idx + np.sum(data['num_samples_dist']) for idx in data['valid_idx_ls']]
+            data['test_idx_ls'] = [idx + np.sum(data['num_samples_dist']) for idx in data['test_idx_ls']]
+
+
+        data['rel_ls_no_dur'] = [[4, 16, 17, 20], [0, 7]][dataset_index]
+
+        # todo: shift mode
+        with open('../data/'+ data['dataset_name'] +'_time_pred_eval_rm_idx.json', 'r') as file:
+            data['rm_ls'] = json.load(file)
+        if option.shift:
+            with open('../data/'+ data['dataset_name'] +'_time_pred_eval_rm_idx_shift_mode.json', 'r') as file:
+                data['rm_ls'] = json.load(file)
+
+        if option.flag_acceleration:
+            data['mdb'], data['connectivity'], data['TEKG_nodes'] = None, None, None
+        else:
+            data['mdb'], data['connectivity'], data['TEKG_nodes'], data['num_entity'] = self.prepare_whole_TEKG_graph(data)
+
+        # todo
+        if option.flag_use_dur:
+            with open("../output/"+ data['dataset_name'] + "_dur_preds.json", "r") as json_file:
+                data['pred_dur'] = json.load(json_file)
+
+        print("Data prepared.")
+
+
+        option.this_expsdir = os.path.join(option.exps_dir, data['dataset_name'] + '_' + option.tag)
+        if not os.path.exists(option.this_expsdir):
+            os.makedirs(option.this_expsdir)
+        option.ckpt_dir = os.path.join(option.this_expsdir, "ckpt")
+        if not os.path.exists(option.ckpt_dir):
+            os.makedirs(option.ckpt_dir)
+        option.model_path = os.path.join(option.ckpt_dir, "model")
+
+
+        option.num_step = [4, 6][dataset_index]
+        option.num_rule = [1000, 6000][dataset_index]
+        option.flag_interval = True
+
+        option.savetxt = option.this_expsdir + '/intermediate_res.txt'
+        option.save()
+
+        print("Option saved.")
+
+        data['random_walk_res'] = None
+        if option.train:
+            self.prepare_graph_random_walk_res(option, data, 'Train', num_workers=20, show_tqdm=True)
+            print('Data preprocessed.')
+
+        return data
+
+
+    def obtain_all_data(self, dataset, shuffle_train_set=True, flag_use_valid=1):
+        edges1 = read_dataset_txt('../data/'+ dataset +'/train.txt')
+        edges1 = np.array(edges1)
+
+        if shuffle_train_set:
+            edges1 = my_shuffle(edges1)
+
+        edges2 = None
+        if flag_use_valid:
+            edges2 = read_dataset_txt('../data/'+ dataset +'/valid.txt')
+            edges2 = np.array(edges2)
+
+        edges3 = read_dataset_txt('../data/'+ dataset +'/test.txt')
+        edges3 = np.array(edges3)
+
+        return edges1, edges2, edges3
+
+
+    def processing_stat_res(self, dataset, num_rel, flag_time_shifting=0):
+        # read results
+        stat_res = {}
+        for rel in range(num_rel):
+            path = '../output/' + dataset + '/' + dataset + "_stat_res_" + str(rel) + ".json" if not flag_time_shifting else '../output/' + dataset + '/' + dataset + "_time_shifting_stat_res_rel.json"
+            with open(path, "r") as f:
+                stat_res[str(rel)] = json.load(f)
+
+        pattern_ls, ts_stat_ls, te_stat_ls = {}, {}, {}
+        for rel in range(num_rel):
+            pattern_ls[rel], ts_stat_ls[rel], te_stat_ls[rel] = [], [], []
+        
+            for rule in stat_res[str(rel)]:
+                if len(stat_res[str(rel)][rule].keys()) == 0:
+                    continue
+
+                pattern_ls[rel].append(rule)
+
+                # stat_res: time_gap_ts_ref_ts + time_gap_ts_ref_te + time_gap_te_ref_ts + time_gap_te_ref_te
+                # cur_ts_stat_ls: 'ts_first_event_ts', 'ts_first_event_te', 'ts_last_event_ts', 'ts_last_event_te'
+                # cur_ts_stat_ls: 'te_first_event_ts', 'te_first_event_te', 'te_last_event_ts', 'te_last_event_te'
+
+                for k in stat_res[str(rel)][rule]:
+                    stat_res[str(rel)][rule][k] = np.array(stat_res[str(rel)][rule][k])
+
+                # remove invalid mean and std values
+                stat_res[str(rel)][rule]['mean'][stat_res[str(rel)][rule]['num_samples'] == 0] = 9999
+                stat_res[str(rel)][rule]['std'][stat_res[str(rel)][rule]['num_samples'] == 0] = 9999
+                stat_res[str(rel)][rule]['std'][stat_res[str(rel)][rule]['std'] < 5] = 5
+
+                cur_ts_stat_ls = [item for pair in zip(stat_res[str(rel)][rule]['mean'][[0, 2, 1, 3]], stat_res[str(rel)][rule]['std'][[0, 2, 1, 3]]) for item in pair]
+                cur_te_stat_ls = [item for pair in zip(stat_res[str(rel)][rule]['mean'][[4, 6, 5, 7]], stat_res[str(rel)][rule]['std'][[0, 2, 1, 3]]) for item in pair]
+
+                ts_stat_ls[rel].append(cur_ts_stat_ls)
+                te_stat_ls[rel].append(cur_te_stat_ls)
+
+
+        return pattern_ls, ts_stat_ls, te_stat_ls
+
+
+
+    def read_random_walk_results(dataset, rel_ls, file_paths, file_suffix, data1=None, flag_interval=True, flag_plot=False, mode=None, flag_time_shifting=False):
+        output_dir = '../output/' + dataset + '/' if not flag_time_shifting else '../output/' + dataset + '_time_shifting/'
+        if not os.path.exists(output_dir):
+            os.mkdir(output_dir)
+            os.mkdir(output_dir + 'samples')
+
+        for rel in rel_ls:
+            samples_edges = {}
+            stat_res = {}
+
+            if data1 is None:
+                data = {}
+                for file_path in file_paths:
+                    if not '_rel_' + str(rel) in file_path:
+                        continue
+                    with open(file_path) as f:
+                        data.update(json.load(f))
+            else:
+                data = data1
+
+            if len(data) == 0:
+                continue
+
+            for rule_length in [1,2,3,4,5]:
+                if str(rule_length) not in data:
+                    continue
+                for TR_ls in data[str(rule_length)]:
+                    for x in data[str(rule_length)][TR_ls]:
+                        e = [x['entities'][0], x["relations"][0], x['entities'][1], x['ts'][0]]
+                        if flag_interval:
+                            e.append(x['te'][0])
+                        e = tuple(e)
+                        rule_pattern = ' '.join([str(cur_rel) for cur_rel in x["relations"][1:]]) + ' ' + TR_ls
+                        cur_ref_edge = [[x['entities'][1], x["relations"][1], x['entities'][2], x['ts'][1]], 
+                                        [x['entities'][-2], x["relations"][-1], x['entities'][-1], x['ts'][-1]]]
+
+                        if rule_pattern not in stat_res:
+                            stat_res[rule_pattern] = []
+
+                        if mode == 'Train':
+                            if flag_interval:
+                                cur_time_gap = list_subtract(x['ts'][0:1], x['ts'][-1:]) + list_subtract(x['te'][0:1], x['ts'][-1:])
+                            else:
+                                cur_time_gap = list_subtract(x['ts'][0:1], x['ts'][1:2]) + list_subtract(x['ts'][0:1], x['ts'][-1:])
+                            stat_res[rule_pattern].append(cur_time_gap)
+
+                        if e not in samples_edges:
+                            samples_edges[e] = {}
+                        if rule_pattern not in samples_edges[e]:
+                            samples_edges[e][rule_pattern] = []
+
+                        samples_edges[e][rule_pattern].append(cur_ref_edge)
+            
+            if mode == 'Train':
+                for rule_pattern in stat_res:
+                    res = np.vstack(stat_res[rule_pattern]).astype(float)
+                    stat_res[rule_pattern] = {'ts_first_event':{}, 'ts_last_event':{}}
+
+                    mean_ls, std_ls, prop_ls = adaptive_Gaussian_dist_estimate_new_ver(res[:, 0])
+                    stat_res[rule_pattern]['ts_first_event'] = {'mean_ls': mean_ls, 'std_ls': std_ls, 'prop_ls': prop_ls}
+                    mean_ls, std_ls, prop_ls = adaptive_Gaussian_dist_estimate_new_ver(res[:, 1])
+                    stat_res[rule_pattern]['ts_last_event'] = {'mean_ls': mean_ls, 'std_ls': std_ls, 'prop_ls': prop_ls}
+
+                    if flag_plot:
+                        for rule_length in [1,2,3,4,5]:
+                            plot_freq_hist(res[:, 0], 10, 'fig/len' + str(rule_length) + '/' + '_'.join([str(rel), rule_pattern, 'ts']))
+                            plot_freq_hist(res[:, 1], 10, 'fig/len' + str(rule_length) + '/' + '_'.join([str(rel), rule_pattern, 'te']))
+
+                with open(output_dir +  dataset + file_suffix + 'stat_res_rel_' + str(rel) + '_' + mode +'.json', 'w') as f:
+                    json.dump(stat_res, f)
+
+                for e in samples_edges:
+                    with open(output_dir + 'samples/' + dataset + file_suffix +  mode + '_sample_' + str(e) + ".json", "w") as f:
+                        json.dump(convert_dict({e: samples_edges[e]}), f)
+
+                rule_nums = rule_num_stat(samples_edges)
+
+                if rel not in rule_nums:
+                    pattern_ls = []
+                else:
+                    pattern_ls = sorted(rule_nums[rel], key=lambda p: rule_nums[rel][p], reverse=True)[:1000]
+                    random.shuffle(pattern_ls)
+
+                with open(output_dir + dataset + file_suffix + "pattern_ls_rel_" + str(rel) + ".json", 'w') as file:
+                    json.dump(pattern_ls, file)
+
+        return
+
+
+
+    def process_random_walk_results_dist_ver(self, dataset, mode, num_rel, file_paths, num_workers=10):
+        index_pieces = split_list_into_pieces(range(num_rel), num_workers)
+
+        data = {}
+        for file_path in file_paths:
+            with open(file_path) as f:
+                data.update(json.load(f))
+
+        Parallel(n_jobs=num_workers)(delayed(self.read_random_walk_results)(dataset, piece, data=data, flag_interval=False, 
+                                                        flag_plot=False, mode=mode) for piece in index_pieces)
+        return
+
+
+
+    def create_inputs_interval_ver(self, path, dataset, edges, idx_ls, targ_rel, num_samples_dist, pattern_ls, timestamp_range, num_rel, 
+                     ts_stat_ls, te_stat_ls, mode=None, rm_ls=None, with_ref_end_time=True, 
+                     only_find_samples_with_empty_rules=False, flag_output_probs_with_ref_edges=False,
+                     flag_acceleration=False, flag_time_shift=False, write_to_file=False, show_tqdm=False,
+                     flag_rule_split=False):            
+        
+        input_intervals = {}
+        if flag_output_probs_with_ref_edges:
+            probs = {}
+        sample_with_empty_rules_ls = []
+
+        cnt = 0
+        if show_tqdm:
+            idx_ls = tqdm(idx_ls, desc='Creating input probs')
+        for data_idx in idx_ls:
+            ############ prepare output #######
+            if write_to_file:
+                input_intervals = {}
+                if flag_output_probs_with_ref_edges:
+                    probs = {}
+            ###################################
+
+            ############ read data ############
+            file = dataset + '_idx_' + str(data_idx) + '.json'
+            if not os.path.exists(path + file):
+                sample_with_empty_rules_ls.append(data_idx)
+                continue
+            with open(path + file, 'r') as f:
+                data = f.read()
+                json_data = json.loads(data)
+            ###################################
+
+            if mode == 'Test' and rm_ls !=None and (data_idx - num_samples_dist[0] - num_samples_dist[1]) in rm_ls:
+                    # print(json_data['query'])
+                    continue
+            if targ_rel != None and json_data['query'][1] != targ_rel:
+                    continue
+            
+            ############# process data ########
+            cur_rel = json_data['query'][1]
+            cur_output = self.read_TEILP_results({}, json_data, with_ref_end_time)
+            if mode == 'Train':
+                cur_interval = [int(json_data['query'][3]), int(json_data['query'][4])]
+            else:
+                # data_idx -= num_samples_dist[1]
+                if data_idx >= len(edges):
+                    cur_interval = edges[data_idx - len(edges), 3:]
+                else:
+                    cur_interval = edges[data_idx, 3:]
+            ###################################
+
+            ########### output ############
+            input_intervals[data_idx] = cur_interval
+            ###############################
+
+            if len(cur_output[cur_rel]) == 0:
+                sample_with_empty_rules_ls.append(data_idx)
+                continue
+
+            cur_valid_rules = [p for p in cur_output[cur_rel] if p in pattern_ls[cur_rel]]
+            if len(cur_valid_rules) == 0:
+                sample_with_empty_rules_ls.append(data_idx)
+                continue
+
+            if only_find_samples_with_empty_rules:
+                continue
+
+            if flag_output_probs_with_ref_edges:
+                probs[data_idx] = {0:{}, 1:{}}  # [first event, last event]
+
+            for p in cur_valid_rules:
+                # for each rule, calculate the probability of the time gap
+                p_idx = pattern_ls[cur_rel].index(p)
+                ruleLen = len(p.split(' '))//2
+                prob_ls = {i: [] for i in range(8)}
+                cur_stat_ls = ts_stat_ls[cur_rel][p_idx] + te_stat_ls[cur_rel][p_idx]
+
+                for (idx_time_ref, time_ref) in enumerate(cur_output[cur_rel][p]['time_ref']):
+                    if flag_output_probs_with_ref_edges:
+                        refEdge = cur_output[cur_rel][p]['edge_ref'][idx_time_ref]
+                        for idx_first_or_last_event in [0,1]:
+                            if str_tuple(refEdge[0]) not in probs[data_idx][idx_first_or_last_event]:
+                                probs[data_idx][idx_first_or_last_event][str_tuple(refEdge[idx_first_or_last_event])] = {i: [] for i in range(4)}
+                                if flag_rule_split:
+                                    for i in range(4):
+                                        probs[data_idx][idx_first_or_last_event][str_tuple(refEdge[idx_first_or_last_event])][i] = {rLen: [] for rLen in range(1, 6)}
+                
+                    for idx_ts_or_te in [0,1]:
+                        for idx_first_or_last_event in [0,1]:
+                            for idx_ref_time_ts_or_te in [0,1]:
+                                refTime = time_ref[idx_first_or_last_event][idx_ref_time_ts_or_te]
+                                delta_t = timestamp_range - refTime
+                                idx_prob_ls = 4*idx_ts_or_te + 2*idx_first_or_last_event + idx_ref_time_ts_or_te
+                                cur_Gau_mean = cur_stat_ls[idx_prob_ls*2]
+                                cur_Gau_std = cur_stat_ls[idx_prob_ls*2+1]
+
+                                if 9999 in [refTime, cur_Gau_mean, cur_Gau_std]:
+                                    # invalid time exists
+                                    continue
+
+                                cur_probs = gaussian_pdf(delta_t, cur_Gau_mean, cur_Gau_std)
+
+                                if flag_time_shift:
+                                    cur_probs[delta_t < 0] = 0
+
+                                if len(cur_probs[np.isnan(cur_probs)])>0 or len(cur_probs[np.isinf(cur_probs)])>0 or len(cur_probs) == 0:
+                                    continue
+
+                                cur_probs /= np.sum(cur_probs)
+                                cur_probs /= np.max(cur_probs)
+                                cur_probs = np.around(cur_probs, decimals=6)
+
+                                if mode == 'Train':
+                                    # use ground truth
+                                    cur_probs = cur_probs[delta_t.tolist().index(cur_interval[idx_ts_or_te] - refTime)]
+                                
+                                prob_ls[idx_prob_ls].append(cur_probs)
+
+                                if flag_acceleration:
+                                    cur_probs = [cur_probs, p_idx]
+
+                                if flag_output_probs_with_ref_edges:
+                                    if flag_rule_split:
+                                        probs[data_idx][idx_first_or_last_event][str_tuple(refEdge[idx_first_or_last_event])]\
+                                                            [2*idx_ts_or_te + idx_ref_time_ts_or_te][ruleLen].append(cur_probs)                                    
+                                    else:
+                                        probs[data_idx][idx_first_or_last_event][str_tuple(refEdge[idx_first_or_last_event])]\
+                                                                [2*idx_ts_or_te + idx_ref_time_ts_or_te].append(cur_probs)
+
+                for idx_prob_ls in range(len(prob_ls)):
+                    if len(prob_ls[idx_prob_ls])>0:
+                        prob_ls[idx_prob_ls] = np.mean(prob_ls[idx_prob_ls]) if mode == 'Train' else np.mean(prob_ls[idx_prob_ls], axis=0)
+                    else:
+                        prob_ls[idx_prob_ls] = 1./len(timestamp_range) if mode == 'Train' else np.array([1./len(timestamp_range)] * len(timestamp_range))
+            
+            if len(cur_valid_rules) == 0:
+                continue
+
+            cnt += 1
+
+            if write_to_file:
+                output = [input_intervals[data_idx]]
+                if flag_output_probs_with_ref_edges:
+                    output.append(probs[data_idx])
+
+                file = dataset + '_idx_' + str(data_idx) + '_input.json'
+                with open('../output/process_res/' + file, 'w') as f:
+                    json.dump(output, f)
+
+            # Loop end for one sample
+
+        output_ls = [input_intervals]
+        if flag_output_probs_with_ref_edges:
+            output_ls.append(probs)
+
+        return output_ls
+
+
+    def create_inputs_timestamp_ver(self, samples, samples_inv, targ_rels, pattern_ls, timestamp_range, num_rel, stat_res, mode=None,
+                     flag_only_find_samples_with_empty_rules=False, dataset=None, file_suffix='', 
+                     flag_compression=True, flag_write=False, flag_time_shifting=False, pattern_ls_fkt=None, stat_res_fkt=None,
+                     shift_ref_time=None, flag_rm_seen_timestamp=False):
+        cnt = 0
+        sample_with_empty_rules_ls = []
+
+        if samples is None:
+            samples = {}
+            samples_inv = {}
+            for rel in targ_rels:
+                with open('output/' + dataset + '/' + dataset + '_'+ mode +'_samples_edge_rel_'+ str(rel) + file_suffix + '.json', 'r') as file:
+                    samples.update(json.load(file))
+                with open('output/' + dataset + '/' + dataset + '_'+ mode +'_samples_edge_rel_'+ str(rel + num_rel) + file_suffix + '.json', 'r') as file:
+                    samples_inv.update(json.load(file))
+
+        dataset_index = ['wiki', 'YAGO', 'icews14', 'icews05-15', 'gdelt100'].index(dataset)
+        relaxed_std = [10, 10, 30, 300, 30][dataset_index]
+        max_mean = [100, 100, 120, 900, 120][dataset_index]
+
+        edge_probs = []
+        for e_str in samples:
+            e = [int(num) for num in e_str[1:-1].split(',')]
+
+            if targ_rels is not None:
+                if e[1] not in targ_rels:
+                    continue
+
+            cur_rel = e[1]
+            cur_ts = e[3]
+
+            e_inv = obtain_inv_edge(np.array([e]), num_rel)[0]
+            cur_rel_inv = e_inv[1]
+            e_inv_str = str(tuple(e_inv))
+
+            if len(samples[e_str]) == 0:
+                if e_inv_str not in samples_inv:
+                    sample_with_empty_rules_ls.append(e)
+                    continue
+                elif len(samples_inv[e_inv_str]) == 0:
+                    sample_with_empty_rules_ls.append(e)
+                    continue
+
+            cur_valid_rules = [p for p in samples[e_str] if p in pattern_ls[str(cur_rel)]]
+            cur_valid_rules_inv_rel = []
+            if e_inv_str in samples_inv:
+                if not flag_time_shifting:
+                    cur_valid_rules_inv_rel = [p for p in samples_inv[e_inv_str] if p in pattern_ls[str(cur_rel_inv)]]
+                else:
+                    cur_valid_rules_inv_rel = [p for p in samples_inv[e_inv_str] if p in pattern_ls_fkt[str(cur_rel_inv)]]
+
+
+            if len(cur_valid_rules) == 0 and len(cur_valid_rules_inv_rel) == 0:
+                sample_with_empty_rules_ls.append(e)
+                continue
+
+            if flag_only_find_samples_with_empty_rules:
+                continue
+            
+            dim = 1 if mode == 'Train' else len(timestamp_range)
+            type_ref_time = ['ts_first_event', 'ts_last_event']
+
+            cur_edge_probs_first_ref, cur_edge_probs_last_ref = {}, {}
+            for p in cur_valid_rules:
+                p_idx = pattern_ls[str(cur_rel)].index(p)
+                prob_ls = {0:[], 1:[]}
+
+                for idx in range(2):
+                    mean_ls = stat_res[str(cur_rel)][p][type_ref_time[idx]]['mean_ls']
+                    std_ls = stat_res[str(cur_rel)][p][type_ref_time[idx]]['std_ls']
+                    prop_ls = stat_res[str(cur_rel)][p][type_ref_time[idx]]['prop_ls']
+
+                    if mode == 'Train':
+                        time_gap = cur_ts - np.array(samples[e_str][p])[:, idx, 3]
+                        prob_ls[idx] = calculate_prob_for_adaptive_Gaussian_dist(time_gap, mean_ls, std_ls, prop_ls, relaxed_std, max_mean)
+
+                    else:
+                        if flag_compression:
+                            prob_ls[idx] = np.array(samples[e_str][p])[:, idx, 3]
+                        else:
+                            time_gap = []
+                            for ref_time in np.array(samples[e_str][p])[:, idx, 3]:
+                                time_gap.append(timestamp_range - ref_time)
+                            max_ref_time = max(np.array(samples[e_str][p])[:, idx, 3])
+                            if shift_ref_time is not None:
+                                max_ref_time = copy.copy(shift_ref_time)
+                            time_gap = np.hstack(time_gap)
+                            cur_probs = calculate_prob_for_adaptive_Gaussian_dist(time_gap, mean_ls, std_ls, prop_ls, relaxed_std, max_mean)
+
+                            prob_ls[idx] = cur_probs
+                            prob_ls[idx] = cut_vector(prob_ls[idx], len(samples[e_str][p]))
+                            if flag_time_shifting and flag_rm_seen_timestamp:
+                                prob_ls[idx] = rm_seen_timestamp(prob_ls[idx], timestamp_range, max_ref_time, [time_gap, mean_ls, std_ls, prop_ls, relaxed_std])
+
+                for idx_edge in range(len(samples[e_str][p])):
+                    if tuple(samples[e_str][p][idx_edge][0]) not in cur_edge_probs_first_ref:
+                        cur_edge_probs_first_ref[tuple(samples[e_str][p][idx_edge][0])] = []
+                    if mode == 'Train':
+                        cur_edge_probs_first_ref[tuple(samples[e_str][p][idx_edge][0])].append([prob_ls[0][idx_edge], p_idx])
+                    else:
+                        cur_edge_probs_first_ref[tuple(samples[e_str][p][idx_edge][0])].append([prob_ls[0][idx_edge].tolist(), p_idx])
+
+                    if tuple(samples[e_str][p][idx_edge][1]) not in cur_edge_probs_last_ref:
+                        cur_edge_probs_last_ref[tuple(samples[e_str][p][idx_edge][1])] = []
+                    if mode == 'Train':
+                        cur_edge_probs_last_ref[tuple(samples[e_str][p][idx_edge][1])].append([prob_ls[1][idx_edge], p_idx])
+                    else:
+                        cur_edge_probs_last_ref[tuple(samples[e_str][p][idx_edge][1])].append([prob_ls[1][idx_edge].tolist(), p_idx])
+
+
+            cur_edge_probs_first_ref_inv_rel = {}
+            cur_edge_probs_last_ref_inv_rel = {}
+
+            for p in cur_valid_rules_inv_rel:
+                if not flag_time_shifting:
+                    p_idx = pattern_ls[str(cur_rel_inv)].index(p)
+                else:
+                    p_idx = pattern_ls_fkt[str(cur_rel_inv)].index(p)
+
+                prob_ls = {0:[], 1:[]}
+
+                for idx in range(2):
+                    if not flag_time_shifting:
+                        mean_ls = stat_res[str(cur_rel_inv)][p][type_ref_time[idx]]['mean_ls']
+                        std_ls = stat_res[str(cur_rel_inv)][p][type_ref_time[idx]]['std_ls']
+                        prop_ls = stat_res[str(cur_rel_inv)][p][type_ref_time[idx]]['prop_ls']
+                    else:
+                        mean_ls = stat_res_fkt[str(cur_rel_inv)][p][type_ref_time[idx]]['mean_ls']
+                        std_ls = stat_res_fkt[str(cur_rel_inv)][p][type_ref_time[idx]]['std_ls']
+                        prop_ls = stat_res_fkt[str(cur_rel_inv)][p][type_ref_time[idx]]['prop_ls']
+
+                    if mode == 'Train':
+                        time_gap = cur_ts - np.array(samples_inv[e_inv_str][p])[:, idx, 3]
+                        prob_ls[idx] = calculate_prob_for_adaptive_Gaussian_dist(time_gap, mean_ls, std_ls, prop_ls, relaxed_std, max_mean)
+                    else:
+                        if flag_compression:
+                            prob_ls[idx] = np.array(samples_inv[e_inv_str][p])[:, idx, 3]
+                        else:
+                            time_gap = []
+                            for ref_time in np.array(samples_inv[e_inv_str][p])[:, idx, 3]:
+                                time_gap.append(timestamp_range - ref_time)
+                            max_ref_time = max(np.array(samples_inv[e_inv_str][p])[:, idx, 3])
+                            if shift_ref_time is not None:
+                                max_ref_time = copy.copy(shift_ref_time)
+                            time_gap = np.hstack(time_gap)
+                            cur_probs = calculate_prob_for_adaptive_Gaussian_dist(time_gap, mean_ls, std_ls, prop_ls, relaxed_std, max_mean)
+                            # cur_probs[time_gap < 0] = 0
+                            if np.sum(cur_probs) == 0:
+                                print(time_gap, mean_ls, std_ls, prop_ls)
+                            prob_ls[idx] = cur_probs
+                            prob_ls[idx] = cut_vector(prob_ls[idx], len(samples_inv[e_inv_str][p]))
+                            if flag_time_shifting and flag_rm_seen_timestamp:
+                                prob_ls[idx] = rm_seen_timestamp(prob_ls[idx], timestamp_range, max_ref_time, [time_gap, mean_ls, std_ls, prop_ls, relaxed_std])
+
+                for idx_edge in range(len(samples_inv[e_inv_str][p])):
+                    if tuple(samples_inv[e_inv_str][p][idx_edge][0]) not in cur_edge_probs_first_ref_inv_rel:
+                        cur_edge_probs_first_ref_inv_rel[tuple(samples_inv[e_inv_str][p][idx_edge][0])] = []
+                    if mode == 'Train':
+                        cur_edge_probs_first_ref_inv_rel[tuple(samples_inv[e_inv_str][p][idx_edge][0])].append([prob_ls[0][idx_edge], p_idx])
+                    else:
+                        cur_edge_probs_first_ref_inv_rel[tuple(samples_inv[e_inv_str][p][idx_edge][0])].append([prob_ls[0][idx_edge].tolist(), p_idx])
+
+                    if tuple(samples_inv[e_inv_str][p][idx_edge][1]) not in cur_edge_probs_last_ref_inv_rel:
+                        cur_edge_probs_last_ref_inv_rel[tuple(samples_inv[e_inv_str][p][idx_edge][1])] = []
+                    if mode == 'Train':
+                        cur_edge_probs_last_ref_inv_rel[tuple(samples_inv[e_inv_str][p][idx_edge][1])].append([prob_ls[1][idx_edge], p_idx])
+                    else:
+                        cur_edge_probs_last_ref_inv_rel[tuple(samples_inv[e_inv_str][p][idx_edge][1])].append([prob_ls[1][idx_edge].tolist(), p_idx])
+
+            cnt += 1
+            cur_edge_probs = {'input_edge_probs_first_ref': convert_dict(cur_edge_probs_first_ref), 
+                              'input_edge_probs_last_ref': convert_dict(cur_edge_probs_last_ref),
+                              'input_edge_probs_first_ref_inv_rel': convert_dict(cur_edge_probs_first_ref_inv_rel), 
+                              'input_edge_probs_last_ref_inv_rel': convert_dict(cur_edge_probs_last_ref_inv_rel)}
+
+            edge_probs.append(cur_edge_probs)
+
+            if flag_write:
+                with open("output/"+ dataset + '/' + dataset +"_"+ mode +"_input_edge_probs_edge_"+ str(e) + file_suffix + ".json", "w") as json_file:
+                    json.dump(cur_edge_probs, json_file)
+
+            # Loop end for one sample
+        # Loop end for all samples
+
+        return edge_probs
+
+
+    def prepare_graph_random_walk_res(self, option, data, mode, num_workers=20, file_suffix='', show_tqdm=True):
+        dataset = data['dataset_name']
+        if dataset in ['wiki', 'YAGO']:
+            idx_ls = data['train_idx_ls'] if mode == 'Train' else data['test_idx_ls']
+            idx_pieces = split_list_into_pieces(idx_ls, num_workers)
+            outputs = Parallel(n_jobs=num_workers)(delayed(self.create_TEKG_in_batch)(option, data, one_piece, mode, show_tqdm) for one_piece in idx_pieces)
+
+            output_probs_with_ref_edges = {}
+            for output in outputs:
+                output_probs_with_ref_edges.update(output)
+            return output_probs_with_ref_edges
+
+        else:
+            timestamp_range = data['timestamp_range']
+            num_rel = data['num_rel']
+
+            path1 = 'output/' + dataset + '/' + dataset + "_"+ mode + "_samples_edge"+ file_suffix + ".json"
+            path2 = 'output/' + dataset + '/' + dataset + "_"+ mode + "_samples_edge_rel_0"+ file_suffix + ".json"
+            if (not os.path.exists(path1)) and (not os.path.exists(path2)):
+                if dataset in ['icews14', 'icews05-15']:
+                    if mode == 'Train':
+                        file_paths = ['../output/'+ dataset + '/'+ dataset + '_train_walks_suc_with_TR.json']
+                    else:
+                        file_paths = []
+                        k_ls = [0,1,2,3] if dataset == 'icews14' else [0,1,2] + ['3_split'+str(i) for i in range(10)]
+                        for k in k_ls:
+                            file_paths.append('../output/'+ dataset + '/'+ dataset + '_test_samples_part'+ str(k) +'.json')
+                elif dataset in ['gdelt']:
+                    if mode == 'Train':
+                        file_paths = ['../output/gdelt_train_walks_suc_with_TR.json']
+                    else:
+                        file_paths = ['../output/gdelt_test_samples.json']
+
+                self.process_random_walk_results_dist_ver(dataset, mode = mode, num_rel=num_rel, file_paths=file_paths, file_suffix=file_suffix, num_workers=num_workers)
+
+
+            if dataset in ['icews14', 'icews05-15']:
+                dataset1 = dataset
+            elif dataset in ['gdelt']:
+                dataset1 = 'gdelt_with_num_walks_per_rule_30'
+
+            with open('../output/'+ dataset1 +'/' + dataset + '_pattern_ls'+ file_suffix +'.json', 'r') as file:
+                pattern_ls = json.load(file)
+
+            samples = None
+            if os.path.exists(dataset + "_"+ mode +"_samples_edge"+ file_suffix + ".json"):
+                with open(dataset + '_'+ mode +'_samples_edge'+ file_suffix + '.json', 'r') as file:
+                    samples = json.load(file)
+
+            with open('../output/'+ dataset1 +'/' + dataset + '_train_stat_res_via_random_walk'+ file_suffix + '.json', 'r') as file:
+                stat_res = json.load(file)
+
+
+            rel_ls = list(range(num_rel//2))
+            idx_pieces = split_list_into_pieces(rel_ls, num_workers)
+            Parallel(n_jobs=num_workers)(delayed(self.create_inputs_timestamp_ver)\
+                                                (samples, one_piece, pattern_ls, timestamp_range, 
+                                                    num_rel//2, stat_res, mode=mode,
+                                                    flag_only_find_samples_with_empty_rules=False, dataset=dataset) for one_piece in idx_pieces)
+            return
+
+
+    def create_TEKG_in_batch(self, option, data, idx_ls, mode, show_tqdm):
+        path = data['path']
+        dataset = data['dataset']
+        dataset_name = data['dataset_name']
+
+        edges = np.vstack((data['train_edges'], data['test_edges']))
+        num_samples_dist = data['num_samples_dist']
+        timestamp_range = data['timestamp_range']
+
+        num_rel = data['num_rel']
+        num_entity = data['num_entity']
+
+        pattern_ls = data['pattern_ls']
+        ts_stat_ls = data['ts_stat_ls']
+        te_stat_ls = data['te_stat_ls']
+
+        rm_ls = data['rm_ls']
+
+        prob_type_for_training = option.prob_type_for_training
+        num_step = option.num_step-1
+        flag_ruleLen_split_ver = option.flag_ruleLen_split_ver
+        flag_acceleration = option.flag_acceleration
+        num_rule = option.num_rule
+
+        assert data['dataset_name'] in ['wiki', 'YAGO'], 'This function is designed for interval dataset.'
+
+        write_to_file = True if mode == 'Train' else False
+
+        output = self.create_inputs_interval_ver(edges=edges, path=path, 
+                                    dataset=dataset_name, 
+                                    idx_ls=idx_ls,
+                                    pattern_ls=pattern_ls, 
+                                    timestamp_range=timestamp_range, 
+                                    num_rel=num_rel//2,
+                                    ts_stat_ls=ts_stat_ls, 
+                                    te_stat_ls=te_stat_ls,
+                                    with_ref_end_time=True,
+                                    targ_rel=None, num_samples_dist=num_samples_dist, 
+                                    mode=mode, rm_ls=rm_ls,
+                                    flag_output_probs_with_ref_edges=True,
+                                    flag_acceleration=flag_acceleration,
+                                    flag_rule_split=option.flag_ruleLen_split_ver,
+                                    show_tqdm=show_tqdm, write_to_file=write_to_file)
+        return output[-1]
+
+
+
+    def read_TEILP_results(self, output, res_dict, with_ref_end_time=False, flag_capture_dur_only=False, rel=None, known_edges=None, stats=False):
+        '''
+        Read the results of the TEILP model and extract the relevant information.
+
+        To accelerate, we select path for the given rules.
+        '''
+        
+        target_query = res_dict['query'][1]
+        targ_interval = res_dict['query'][3:]
+        if not stats:
+            output = {}
+
+        notation_invalid = 9999 if not stats else np.nan
+
+        if rel is not None:
+            if int(target_query) !=rel:
+                return output
+
+        output[target_query] = {}
+        for rlen in res_dict.keys():
+            if rlen == 'query':
+                continue
+
+            for walk in res_dict[rlen]:
+                if known_edges is not None:
+                    for i in range(int(rlen)):
+                        if ([walk[4*i:4*i+5][num] for num in [0,1,4,2,3]] not in known_edges.tolist()) and (walk[4*i+2:4*i+4] != [9999, 9999]):
+                            walk[4*i+2:4*i+4] = [9999, 9999]
+
+                rel_ls = [str(walk[4*i+1]) for i in range(int(rlen))]
+                interval_ls = [[9999, 9999]] + [walk[4*i+2:4*i+4] for i in range(int(rlen))]
+                TR_ls = [calculate_TR(interval_ls[i], interval_ls[i+1]) for i in range(int(rlen))]
+                edge_ls = [walk[4*i:4*i+5] for i in range(int(rlen))]
+
+                if not flag_capture_dur_only:
+                    if not with_ref_end_time:
+                        time_gap_ts = [cal_timegap(targ_interval[0], interval_ls[1][0], notation_invalid), cal_timegap(targ_interval[0], interval_ls[-1][0], notation_invalid)]
+                        time_gap_te = [cal_timegap(targ_interval[1], interval_ls[1][0], notation_invalid), cal_timegap(targ_interval[1], interval_ls[-1][0], notation_invalid)]
+                        time_ref = [interval_ls[1][0], interval_ls[-1][0]]
+                    else:
+                        time_gap_ts_ref_ts = [cal_timegap(targ_interval[0], interval_ls[1][0], notation_invalid), cal_timegap(targ_interval[0], interval_ls[-1][0], notation_invalid)]
+                        time_gap_ts_ref_te = [cal_timegap(targ_interval[0], interval_ls[1][1], notation_invalid), cal_timegap(targ_interval[0], interval_ls[-1][1], notation_invalid)]
+                        time_gap_te_ref_ts = [cal_timegap(targ_interval[1], interval_ls[1][0], notation_invalid), cal_timegap(targ_interval[1], interval_ls[-1][0], notation_invalid)]
+                        time_gap_te_ref_te = [cal_timegap(targ_interval[1], interval_ls[1][1], notation_invalid), cal_timegap(targ_interval[1], interval_ls[-1][1], notation_invalid)]
+                        time_ref = [interval_ls[1], interval_ls[-1]]
+                        edge_ref = [edge_ls[0], edge_ls[-1]]
+
+                dur_with_ref = [cal_timegap(targ_interval[1], targ_interval[0]), interval_ls[1], interval_ls[-1]]
+
+
+                cur_rulePattern = ' '.join(rel_ls + TR_ls)
+                if cur_rulePattern not in output[target_query]:
+                    output[target_query][cur_rulePattern] = {}
+                    if not stats:
+                        output[target_query][cur_rulePattern]['dur_with_ref'] = []
+                    
+                    if not flag_capture_dur_only:
+                        if stats:
+                            output[target_query][cur_rulePattern] = OnlineStatsVector(8) if with_ref_end_time else OnlineStatsVector(4)
+                        else:
+                            if not with_ref_end_time:
+                                output[target_query][cur_rulePattern].update({'time_gap_ts':[], 'time_gap_te':[], 'time_ref':[]})
+                            else:
+                                output[target_query][cur_rulePattern].update({'time_gap_ts_ref_ts':[], 'time_gap_ts_ref_te':[], 
+                                                                                    'time_gap_te_ref_ts':[], 'time_gap_te_ref_te':[], 
+                                                                                    'time_ref':[], 'edge_ref':[], 'edge_ls':[]})
+                if not stats:   
+                    output[target_query][cur_rulePattern]['dur_with_ref'].append(dur_with_ref)
+
+                if not flag_capture_dur_only:
+                    if stats:
+                        if not with_ref_end_time:
+                            output[target_query][cur_rulePattern].update(time_gap_ts + time_gap_te)
+                        else:
+                            output[target_query][cur_rulePattern].update(time_gap_ts_ref_ts + time_gap_ts_ref_te + time_gap_te_ref_ts + time_gap_te_ref_te)
+                    else:
+                        if not with_ref_end_time:
+                            output[target_query][cur_rulePattern]['time_gap_ts'].append(time_gap_ts)
+                            output[target_query][cur_rulePattern]['time_gap_te'].append(time_gap_te)
+                            output[target_query][cur_rulePattern]['time_ref'].append(time_ref)
+
+                            output[target_query][cur_rulePattern]['time_gap_ts'].update(time_gap_ts)
+                            output[target_query][cur_rulePattern]['time_gap_te'].update(time_gap_te)
+                        else:
+                            output[target_query][cur_rulePattern]['time_gap_ts_ref_ts'].append(time_gap_ts_ref_ts)
+                            output[target_query][cur_rulePattern]['time_gap_ts_ref_te'].append(time_gap_ts_ref_te)
+                            output[target_query][cur_rulePattern]['time_gap_te_ref_ts'].append(time_gap_te_ref_ts)
+                            output[target_query][cur_rulePattern]['time_gap_te_ref_te'].append(time_gap_te_ref_te)
+                            output[target_query][cur_rulePattern]['time_ref'].append(time_ref)
+                            output[target_query][cur_rulePattern]['edge_ref'].append(edge_ref)
+                            output[target_query][cur_rulePattern]['edge_ls'].append(edge_ls)
+
+        return output
+
+
+
+    def read_TEILP_results_batch(self, path, file_ls, with_ref_end_time, flag_capture_dur_only, rel_batch, known_edges, stat_res_path,
+                                 num_rules_preserved=200):
+        # preserve the most frequent k rules for each relation
+        for rel in rel_batch:
+            output = {}
+            for file in tqdm(file_ls, desc='Rule summary for relation ' + str(rel)):
+                with open(path + '/' + file, 'r') as f:
+                    data = f.read()
+                    json_data = json.loads(data)
+
+                output = self.read_TEILP_results(output, json_data, with_ref_end_time=with_ref_end_time, flag_capture_dur_only=flag_capture_dur_only, rel=rel, known_edges=known_edges, stats=True)
+        
+            num_samples_dict = []
+            if rel in output:
+                for rule in output[rel]:
+                    num_samples_dict.append([rule, max(output[rel][rule].n)])
+
+                # print(rel, len(num_samples_dict))    
+                num_samples_dict.sort(key=lambda x: x[1], reverse=True)
+                num_samples_dict = num_samples_dict[:num_rules_preserved]
+
+                # if flag_capture_dur_only:
+                #     # todo: for duration calculation
+
+            output_stat = {}
+            for rule in num_samples_dict:
+                rule = rule[0]
+                output_stat[rule] = {'num_samples': output[rel][rule].n.astype(int).tolist(), 'mean': np.around(output[rel][rule].get_mean(), decimals=6).tolist(), 'std': np.around(output[rel][rule].get_std(), decimals=6).tolist()}
+
+            # save the results
+            stat_res_path += "_" + str(rel) + ".json"
+
+            with open(stat_res_path, "w") as f:
+                json.dump(output_stat, f)
+
+        return
+
+
+
+
+
+
+class Option(object):
+    def __init__(self, d):
+        self.__dict__ = d
+    def save(self):
+        with open(os.path.join(self.this_expsdir, "option.txt"), "w") as f:
+            for key, value in sorted(self.__dict__.items(), key=lambda x: x[0]):
+                f.write("%s, %s\n" % (key, str(value)))
+
+
+
+
+class OnlineStatsVector:
+    '''
+    Class to calculate the mean and variance of a vector of values using the online algorithm.
+    '''
+    def __init__(self, vector_length):
+        self.n = np.zeros(vector_length)
+        self.mean = np.zeros(vector_length)
+        self.M2 = np.zeros(vector_length)
+        # self.hist = []
+
+    def update(self, x):
+        x = np.array(x, dtype=float)
+        mask = ~np.isnan(x)
+        delta = np.zeros_like(x)
+        delta2 = np.zeros_like(x)
+        # self.hist.append(x)
+        for i in range(len(x)):
+            if mask[i]:
+                self.n[i] += 1
+                delta[i] = x[i] - self.mean[i]
+                self.mean[i] += delta[i] / self.n[i]
+                delta2[i] = x[i] - self.mean[i]
+                self.M2[i] += delta[i] * delta2[i]
+    
+    def get_mean(self):
+        return self.mean
+    
+    def get_variance(self):
+        variance = np.zeros_like(self.mean)
+        for i in range(len(self.n)):
+            if self.n[i] > 1:
+                variance[i] = self.M2[i] / self.n[i]
+        return variance
+    
+    def get_std(self):
+        return np.sqrt(self.get_variance())
+
+
+
+
+class Rule_summarizer(Data_preprocessor):
+    def convert_walks_into_rules(self, path, dataset, idx_ls=None, with_ref_end_time=True, flag_time_shift=0, 
+                                flag_capture_dur_only=False, rel=None, known_edges=None, flag_few_training=0,
+                                ratio=None, imbalanced_rel=None, flag_biased=0, exp_idx=None, targ_rel_ls=None,
+                                num_processes=20, stat_res_path=''):
+
+        file_ls, rel = obtain_walk_file_ls(path, dataset, idx_ls, ratio, imbalanced_rel, flag_biased, exp_idx)
+        targ_rel_ls = rel if rel is not None else targ_rel_ls
+
+        if targ_rel_ls is None:
+            return
+        
+        num_processes = min(num_processes, len(targ_rel_ls))
+        rel_batch_ls = split_list_into_pieces(targ_rel_ls, num_processes)
+
+        Parallel(n_jobs=num_processes)(
+            delayed(self.read_TEILP_results_batch)(path, file_ls, with_ref_end_time, flag_capture_dur_only, rel_batch, known_edges, stat_res_path) for rel_batch in rel_batch_ls
+            )
+        
+        return
