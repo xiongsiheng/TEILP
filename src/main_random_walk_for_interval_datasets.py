@@ -88,37 +88,42 @@ if targ_rel is not None:
 train_edges, valid_data, valid_data_inv, test_data, test_data_inv = obtain_dataset(dataset_name1, num_rel)
 
 
-# mask valid/test data
-# we use 9999 as unknown value notation (normal (year) values are like 1800, 1923, 2017, etc.)
-if not flag_time_shift:
-    if f_interval:
-        valid_data[:, [3,4]] = 9999
-        valid_data_inv[:, [3,4]] = 9999
-        test_data[:, [3,4]] = 9999
-        test_data_inv[:, [3,4]] = 9999
-    else:
-        valid_data[:, 3] = 9999
-        valid_data_inv[:, 3] = 9999
-        test_data[:, 3] = 9999
-        test_data_inv[:, 3] = 9999
 
-num_train = len(train_edges)//2
-num_valid = len(valid_data)
-num_test = len(test_data)
+def prepare_train_edges():
+    # mask valid/test data
+    # we use 9999 as unknown value notation (normal (year) values are like 1800, 1923, 2017, etc.)
+    if not flag_time_shift:
+        process_data = lambda x: np.hstack((x[:, :3], np.full_like(x[:, 3:], 9999)))
+        valid_data = process_data(valid_data)
+        valid_data_inv = process_data(valid_data_inv)
+        test_data = process_data(test_data)
+        test_data_inv = process_data(test_data_inv)
 
 
-edges = np.vstack([train_edges[:len(train_edges)//2], valid_data, test_data,
-                   train_edges[len(train_edges)//2:], valid_data_inv, test_data_inv])
+    num_train, num_valid, num_test = len(train_edges)//2, len(valid_data), len(test_data)
 
 
-pos_examples_idx = None
+    edges = np.vstack([train_edges[:len(train_edges)//2], valid_data, test_data,
+                    train_edges[len(train_edges)//2:], valid_data_inv, test_data_inv])
+    return edges, num_train, num_valid, num_test
 
-if flag_few_training:
-    pos_examples_idx = []
-    with open('../'+ dataset_name + '/' + dataset_name +'_ratio_' + str(ratio) +'_exp_'+ str(exp_idx) + '_training_idx.json', 'r') as file:
-        pos_examples_idx += json.load(file)
-    pos_examples_idx += list(range(num_train, num_train + num_valid + num_test))
-    pos_examples_idx += [idx + num_train + num_valid + num_test for idx in pos_examples_idx]
+
+edges, num_train, num_valid, num_test = prepare_train_edges()
+
+
+def prepare_pos_examples_idx():
+    pos_examples_idx = None
+    if flag_few_training:
+        pos_examples_idx = []
+        with open('../'+ dataset_name + '/' + dataset_name +'_ratio_' + str(ratio) +'_exp_'+ str(exp_idx) + '_training_idx.json', 'r') as file:
+            pos_examples_idx += json.load(file)
+        pos_examples_idx += list(range(num_train, num_train + num_valid + num_test))
+        pos_examples_idx += [idx + num_train + num_valid + num_test for idx in pos_examples_idx]
+    return pos_examples_idx
+
+
+pos_examples_idx = prepare_pos_examples_idx()
+
 
 
 if not os.path.exists('../output/'):
@@ -134,7 +139,7 @@ random_walk(targ_rel_ls, edges, paras, pos_examples_idx = pos_examples_idx,
 
 
 
-def create_stat_res_path(dataset_using, flag_few_training=False, ratio=None, flag_biased=False, imbalanced_rel=None, flag_time_shift=False):
+def create_stat_res_path():
     # create the path for the stat res
     stat_res_path = '../output/' + dataset_using
     if not os.path.exists(stat_res_path):
@@ -155,7 +160,7 @@ def create_stat_res_path(dataset_using, flag_few_training=False, ratio=None, fla
     return stat_res_path
 
 
-stat_res_path = create_stat_res_path(dataset_using, flag_few_training, ratio, flag_biased, imbalanced_rel, flag_time_shift)
+stat_res_path = create_stat_res_path()
 
 
 
