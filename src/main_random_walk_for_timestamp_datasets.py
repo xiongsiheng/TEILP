@@ -63,23 +63,17 @@ if dataset == 'gdelt100' and flag_time_shifting:
     valid_edges = edges[num_train[0]:num_train[0] + num_train[1]]
     test_edges = edges[num_train[0] + num_train[1]:]
 
-    # print(train_edges)
-
     data.train_idx = np.vstack([train_edges, obtain_inv_edge(train_edges, num_rel)])
     data.valid_idx = np.vstack([valid_edges, obtain_inv_edge(valid_edges, num_rel)])
     data.test_idx = np.vstack([test_edges, obtain_inv_edge(test_edges, num_rel)])
 
-    # print(data.train_idx)
 
-    # sys.exit()
 
 
 transition_distr = ["unif", "exp"][-1]
 BG_idx = [data.train_idx, data.valid_idx, data.test_idx][0]
 
-# print(data.train_idx)
-# print(max(data.train_idx[:, 1]))
-# sys.exit()
+
 
 num_walks_per_sample = [10, 3, 10][dataset_idx]
 num_samples_per_rel = [100, 100, 500][dataset_idx]
@@ -106,17 +100,15 @@ pos_examples = my_shuffle(data.train_idx)
 temporal_walk = Temporal_Walk(BG_idx, data.inv_relation_id, transition_distr, flag_interval=False)
 
 
-TR_ls_dict = {1: [], 2:[], 3:[], 4:[], 5:[]}
-for TR1 in ['bf', 'touch', 'af', 'ukn'][-1:]:
-    TR_ls_dict[1].append([TR1])
-    for TR2 in ['bf', 'touch', 'af']:
-        TR_ls_dict[2].append([TR1, TR2])
-        for TR3 in ['bf', 'touch', 'af']:
-            TR_ls_dict[3].append([TR1, TR2, TR3])
-            for TR4 in ['bf', 'touch', 'af']:
-                TR_ls_dict[4].append([TR1, TR2, TR3, TR4])
-                for TR5 in ['bf', 'touch', 'af']:
-                    TR_ls_dict[5].append([TR1, TR2, TR3, TR4, TR5])
+# possible temporal relations for different rule lengths
+TR_ls_dict = {i: [] for i in range(1, 6)}
+TR1_list = ['ukn']
+TR2_list = TR3_list = TR4_list = TR5_list = ['bf', 'touch', 'af']
+TR_ls_dict[1] = [[TR1] for TR1 in TR1_list]
+TR_ls_dict[2] = [[TR1, TR2] for TR1 in TR1_list for TR2 in TR2_list]
+TR_ls_dict[3] = [[TR1, TR2, TR3] for TR1 in TR1_list for TR2 in TR2_list for TR3 in TR3_list]
+TR_ls_dict[4] = [[TR1, TR2, TR3, TR4] for TR1 in TR1_list for TR2 in TR2_list for TR3 in TR3_list for TR4 in TR4_list]
+TR_ls_dict[5] = [[TR1, TR2, TR3, TR4, TR5] for TR1 in TR1_list for TR2 in TR2_list for TR3 in TR3_list for TR4 in TR4_list for TR5 in TR5_list]
 
 
 
@@ -142,9 +134,6 @@ def random_walk_with_sampling(i, num_relations, all_relations, fix_ref_time=Fals
         output_path = "../output/" + output_path1 + "/" + dataset + "_random_walks_rel_"+ str(rel) + "_train.json"
         if fix_ref_time:
             output_path = "../output/" + output_path1 + "/" + dataset + "_random_walks_rel_"+ str(rel) + "_fix_ref_time_train.json"
-
-        # if os.path.exists(output_path):
-        #     continue
 
         resulted_walk = {}
         this_idx = (pos_examples[pos_examples[:,1] == rel]).copy()

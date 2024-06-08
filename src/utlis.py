@@ -15,6 +15,7 @@ from scipy.stats import kstest, norm
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from sklearn.metrics import mean_absolute_error
+from datetime import datetime
 
 
 def str_tuple(e):

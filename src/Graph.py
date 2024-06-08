@@ -201,7 +201,6 @@ class TEKG_int_acc_ver(TEKG_params):
 
     def create_graph(self, idx_ls, mode):
         random_walk_res, input_intervals_dict = self._initialize_walk_res(idx_ls, mode)
-
         query_edges, query_intervals = self._load_queries(idx_ls)
         query_relations = [query[1] for query in query_edges]
 

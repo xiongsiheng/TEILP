@@ -18,7 +18,6 @@ class Learner(object):
         self.accuracy = option.accuracy
         self.top_k = option.top_k
 
-
         self.num_entity = data['num_entity']
         self.num_operator = data['num_rel']
         self.num_TR = data['num_TR']

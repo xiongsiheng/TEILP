@@ -157,6 +157,8 @@ def create_stat_res_path(dataset_using, flag_few_training=False, ratio=None, fla
 
 stat_res_path = create_stat_res_path(dataset_using, flag_few_training, ratio, flag_biased, imbalanced_rel, flag_time_shift)
 
+
+
 summarizer = Rule_summarizer()
 summarizer.convert_walks_into_rules(dataset=dataset_using, path='../output/' + output_path, idx_ls=pos_examples_idx, 
                         flag_time_shift=flag_time_shift, flag_biased=flag_biased, flag_few_training=flag_few_training,

@@ -94,8 +94,6 @@ class Experiment():
 
             # save_data(self.option.savetxt, 'TEKG_prepared!')
 
-            # print(len(valid_sample_idx))
-
             if len(valid_sample_idx) == 0:
                 continue
 

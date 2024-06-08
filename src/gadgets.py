@@ -5,6 +5,7 @@ from joblib import Parallel, delayed
 from tqdm import tqdm
 import copy
 import random
+import sys
 from utlis import *
 
 
@@ -13,31 +14,45 @@ from utlis import *
 class Data_preprocessor():
     def prepare_data(self, option):
         data = {}
-        dataset_index = ['wiki', 'YAGO'].index(option.dataset)
+        dataset_index = ['wiki', 'YAGO', 'icews14', 'icews05-15', 'gdelt100'].index(option.dataset)
 
         data['path'] = '../output/walk_res/' if not option.shift else '../output/walk_res_time_shift/'
         
-        data['dataset'] = ['WIKIDATA12k', 'YAGO11k'][dataset_index]
+        data['dataset'] = ['WIKIDATA12k', 'YAGO11k', 'icews14', 'icews05-15', 'gdelt100'][dataset_index]
         if option.shift:
             data['dataset'] = 'difficult_settings/' + data['dataset'] + '_time_shifting'
 
-        data['dataset_name'] = ['wiki', 'YAGO'][dataset_index]
+        data['dataset_name'] = ['wiki', 'YAGO', 'icews14', 'icews05-15', 'gdelt100'][dataset_index]
 
-        data['num_rel'] = [48, 20][dataset_index]
-        data['num_entity'] = [40000, 40000][dataset_index]
+        data['num_rel'] = [48, 20, 460, 502, 40][dataset_index]
+        data['num_entity'] = [40000, 40000, 40000, 40000, 40000][dataset_index]
         data['num_TR'] = 4
-
+        
         data['train_edges'], data['valid_edges'], data['test_edges'] = self.obtain_all_data(data['dataset'], shuffle_train_set=False)
 
-        data['timestamp_range'] = [np.arange(-3, 2024, 1), np.arange(-431, 2024, 1)][dataset_index]
+        data['timestamp_range'] = [np.arange(-3, 2024, 1), np.arange(-431, 2024, 1), np.arange(0, 366, 1), np.arange(0, 4017, 1), np.arange(90, 456, 1)][dataset_index]
         num_rel = data['num_rel']//2
         if option.shift:
             num_rel = data['num_rel'] # known time range change
         
-        data['pattern_ls'], data['ts_stat_ls'], data['te_stat_ls'] = self.processing_stat_res(data['dataset_name'], num_rel, flag_time_shifting=option.shift)
+        data['pattern_ls'], data['ts_stat_ls'], data['te_stat_ls'], data['stat_res'] = self.processing_stat_res(data['dataset_name'], num_rel, flag_time_shifting=option.shift)
+
+        data['num_samples_dist'] = [[32497, 4062, 4062], [16408, 2050, 2051], [72826, 8941, 8963], [368962, 46275, 46092], [390045, 48756, 48756]][dataset_index]
 
 
-        data['num_samples_dist'] = [[32497, 4062, 4062], [16408, 2050, 2051]][dataset_index]
+        if option.dataset == 'gdelt100' and option.shift:
+            with open('../data/gdelt100_sparse_edges.json') as json_file:
+                edges = json.load(json_file)
+
+            num_train = [16000, 2000]
+            edges = np.array(edges)
+
+            data['train_edges'] = edges[:num_train[0]]
+            data['valid_edges'] = edges[num_train[0]:num_train[0] + num_train[1]]
+            data['test_edges'] = edges[num_train[0] + num_train[1]:]
+
+            data['num_samples_dist'] = [16000, 2000, 2000]
+
         data['train_idx_ls'] = list(range(data['num_samples_dist'][0]))
         data['valid_idx_ls'] = list(range(data['num_samples_dist'][0], data['num_samples_dist'][0] + data['num_samples_dist'][1]))
         data['test_idx_ls'] = list(range(data['num_samples_dist'][0] + data['num_samples_dist'][1], np.sum(data['num_samples_dist'])))
@@ -48,7 +63,7 @@ class Data_preprocessor():
             data['test_idx_ls'] = [idx + np.sum(data['num_samples_dist']) for idx in data['test_idx_ls']]
 
 
-        data['rel_ls_no_dur'] = [[4, 16, 17, 20], [0, 7]][dataset_index]
+        data['rel_ls_no_dur'] = [[4, 16, 17, 20], [0, 7], None, None, None][dataset_index]
 
         # todo: shift mode
         with open('../data/'+ data['dataset_name'] +'_time_pred_eval_rm_idx.json', 'r') as file:
@@ -67,8 +82,6 @@ class Data_preprocessor():
             with open("../output/"+ data['dataset_name'] + "_dur_preds.json", "r") as json_file:
                 data['pred_dur'] = json.load(json_file)
 
-        print("Data prepared.")
-
 
         option.this_expsdir = os.path.join(option.exps_dir, data['dataset_name'] + '_' + option.tag)
         if not os.path.exists(option.this_expsdir):
@@ -78,20 +91,19 @@ class Data_preprocessor():
             os.makedirs(option.ckpt_dir)
         option.model_path = os.path.join(option.ckpt_dir, "model")
 
-
-        option.num_step = [4, 6][dataset_index]
-        option.num_rule = [1000, 6000][dataset_index]
-        option.flag_interval = True
+        option.num_step = [4, 6, 4, 4, 4][dataset_index]
+        option.num_rule = [1000, 6000, 10000, 10000, 10000][dataset_index]
+        option.flag_interval = True if dataset_index in [0, 1] else False
 
         option.savetxt = option.this_expsdir + '/intermediate_res.txt'
         option.save()
-
         print("Option saved.")
 
+
         data['random_walk_res'] = None
-        if option.train:
+        if dataset_index in [0, 1] and option.train:
             self.prepare_graph_random_walk_res(option, data, 'Train', num_workers=20, show_tqdm=True)
-            print('Data preprocessed.')
+        print("Data prepared.")
 
         return data
 
@@ -115,43 +127,53 @@ class Data_preprocessor():
 
 
     def processing_stat_res(self, dataset, num_rel, flag_time_shifting=0):
-        # read results
-        stat_res = {}
+        path_suffix = '_' if not flag_time_shifting else '_time_shifting_'
+        pattern_ls, ts_stat_ls, te_stat_ls, stat_res = {}, {}, {}, {}
         for rel in range(num_rel):
-            path = '../output/' + dataset + '/' + dataset + "_stat_res_" + str(rel) + ".json" if not flag_time_shifting else '../output/' + dataset + '/' + dataset + "_time_shifting_stat_res_rel.json"
-            with open(path, "r") as f:
-                stat_res[str(rel)] = json.load(f)
+            pattern_ls[rel], ts_stat_ls[rel], te_stat_ls[rel], stat_res[rel] = [], [], [], []
 
-        pattern_ls, ts_stat_ls, te_stat_ls = {}, {}, {}
-        for rel in range(num_rel):
-            pattern_ls[rel], ts_stat_ls[rel], te_stat_ls[rel] = [], [], []
-        
-            for rule in stat_res[str(rel)]:
-                if len(stat_res[str(rel)][rule].keys()) == 0:
+            # read results
+            path = '../output/' + dataset + path_suffix[:-1] + '/' + dataset + path_suffix + "stat_res_rel_" + str(rel) + '.json'
+            if not os.path.exists(path):
+                print(path)
+                continue
+            with open(path, "r") as f:
+                res = json.load(f)
+
+            if dataset in ['icews14', 'icews05-15', 'gdelt100']:
+                stat_res[rel] = res
+                pattern_path = '../output/'+ dataset + path_suffix[:-1] + '/' + dataset + path_suffix + 'pattern_ls_rel_'+ rel +'.json'
+                if os.path.exists(pattern_path):
+                    with open(pattern_path, "r") as f:
+                        pattern_ls[rel] = json.load(f)
+                continue
+            
+            # Below is for interval datasets
+            for rule in res:
+                if len(res[rule].keys()) == 0:
                     continue
 
                 pattern_ls[rel].append(rule)
 
-                # stat_res: time_gap_ts_ref_ts + time_gap_ts_ref_te + time_gap_te_ref_ts + time_gap_te_ref_te
+                # res: time_gap_ts_ref_ts + time_gap_ts_ref_te + time_gap_te_ref_ts + time_gap_te_ref_te
                 # cur_ts_stat_ls: 'ts_first_event_ts', 'ts_first_event_te', 'ts_last_event_ts', 'ts_last_event_te'
                 # cur_ts_stat_ls: 'te_first_event_ts', 'te_first_event_te', 'te_last_event_ts', 'te_last_event_te'
 
-                for k in stat_res[str(rel)][rule]:
-                    stat_res[str(rel)][rule][k] = np.array(stat_res[str(rel)][rule][k])
+                for k in res[rule]:
+                    res[rule][k] = np.array(res[rule][k])
 
                 # remove invalid mean and std values
-                stat_res[str(rel)][rule]['mean'][stat_res[str(rel)][rule]['num_samples'] == 0] = 9999
-                stat_res[str(rel)][rule]['std'][stat_res[str(rel)][rule]['num_samples'] == 0] = 9999
-                stat_res[str(rel)][rule]['std'][stat_res[str(rel)][rule]['std'] < 5] = 5
+                res[rule]['mean'][res[rule]['num_samples'] == 0] = 9999
+                res[rule]['std'][res[rule]['num_samples'] == 0] = 9999
+                res[rule]['std'][res[rule]['std'] < 5] = 5
 
-                cur_ts_stat_ls = [item for pair in zip(stat_res[str(rel)][rule]['mean'][[0, 2, 1, 3]], stat_res[str(rel)][rule]['std'][[0, 2, 1, 3]]) for item in pair]
-                cur_te_stat_ls = [item for pair in zip(stat_res[str(rel)][rule]['mean'][[4, 6, 5, 7]], stat_res[str(rel)][rule]['std'][[0, 2, 1, 3]]) for item in pair]
+                cur_ts_stat_ls = [item for pair in zip(res[rule]['mean'][[0, 2, 1, 3]], res[rule]['std'][[0, 2, 1, 3]]) for item in pair]
+                cur_te_stat_ls = [item for pair in zip(res[rule]['mean'][[4, 6, 5, 7]], res[rule]['std'][[0, 2, 1, 3]]) for item in pair]
 
                 ts_stat_ls[rel].append(cur_ts_stat_ls)
                 te_stat_ls[rel].append(cur_te_stat_ls)
 
-
-        return pattern_ls, ts_stat_ls, te_stat_ls
+        return pattern_ls, ts_stat_ls, te_stat_ls, stat_res
 
 
 
@@ -300,14 +322,12 @@ class Data_preprocessor():
             ############# process data ########
             cur_rel = json_data['query'][1]
             cur_output = self.read_TEILP_results({}, json_data, with_ref_end_time)
+            
             if mode == 'Train':
                 cur_interval = [int(json_data['query'][3]), int(json_data['query'][4])]
             else:
                 # data_idx -= num_samples_dist[1]
-                if data_idx >= len(edges):
-                    cur_interval = edges[data_idx - len(edges), 3:]
-                else:
-                    cur_interval = edges[data_idx, 3:]
+                cur_interval = edges[data_idx - len(edges), 3:] if data_idx >= len(edges) else edges[data_idx, 3:]
             ###################################
 
             ########### output ############
@@ -839,9 +859,7 @@ class Data_preprocessor():
                 output_stat[rule] = {'num_samples': output[rel][rule].n.astype(int).tolist(), 'mean': np.around(output[rel][rule].get_mean(), decimals=6).tolist(), 'std': np.around(output[rel][rule].get_std(), decimals=6).tolist()}
 
             # save the results
-            stat_res_path += "_" + str(rel) + ".json"
-
-            with open(stat_res_path, "w") as f:
+            with open(stat_res_path + "_rel_" + str(rel) + ".json", "w") as f:
                 json.dump(output_stat, f)
 
         return
