@@ -7,7 +7,7 @@ import json
 from dataset_setting import obtain_dataset
 from do_random_walk import random_walk
 from utlis import *
-
+from gadgets import *
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', type=str)
