@@ -31,18 +31,19 @@ class Learner(object):
         self.flag_rel_TR_split = option.different_states_for_rel_and_TR
         self.flag_ruleLen_split = option.flag_ruleLen_split_ver
         self.flag_state_vec_enhan = option.flag_state_vec_enhancement
+        self.flag_acceleration = option.flag_acceleration
 
 
         np.random.seed(self.seed)
 
         if option.flag_ruleLen_split_ver:
-            if option.flag_acceleration:
+            if self.flag_acceleration:
                 self._init_ruleLen_embedding(data['pattern_ls'])
                 self._build_graph_acc_ver()
             else:
                 self._build_graph_ruleLen_split_ver()
         else:
-            if option.flag_acceleration:
+            if self.flag_acceleration:
                 self._build_graph_acc_ver()
             else:
                 self._build_graph()
@@ -356,14 +357,17 @@ class Learner(object):
                 self.pred.append(tf.matmul(self.refNode_source, pred_refNode))
                 
         else:
-            refNode_attn = tf.reduce_sum(self.res_random_walk * attn_rule, axis=1, keep_dims=True)
+            refNode_attn = tf.reduce_sum(self.res_random_walk * attn_rule, axis=1, keep_dims=True)  # shape: (dummy_batch_size, 1)
             
             self.pred = []
             for i in range(int(self.flag_int)+1):
                 probs_from_refNode = attn_refType[3*i+2][:, 0:1] * (attn_refType[3*i][:, 0:1] * self.probs[:,4*i,:] + attn_refType[3*i][:, 1:2] * self.probs[:,4*i+1,:]) + \
-                                     attn_refType[3*i+2][:, 1:2] * (attn_refType[3*i+1][:, 0:1]*self.probs[:,4*i+2,:] + attn_refType[3*i+1][:, 1:2] * self.probs[:,4*i+3,:])
+                                     attn_refType[3*i+2][:, 1:2] * (attn_refType[3*i+1][:, 0:1]*self.probs[:,4*i+2,:] + attn_refType[3*i+1][:, 1:2] * self.probs[:,4*i+3,:])  
                 norm = attn_refType[3*i+2][:, 0:1] * (attn_refType[3*i][:, 0:1] + attn_refType[3*i][:, 1:2]) + attn_refType[3*i+2][:, 1:2] * (attn_refType[3*i+1][:, 0:1] + attn_refType[3*i+1][:, 1:2])
-                probs_from_refNode /= norm
+                probs_from_refNode /= norm    # shape: (dummy_batch_size, num_timestamp)
+                
+                # refNode_source: shape: (batch_size, dummy_batch_size)
+                # refNode_attn * probs_from_refNode: shape: (dummy_batch_size, num_timestamp)
                 self.pred.append(tf.matmul(self.refNode_source, refNode_attn * probs_from_refNode) / tf.matmul(self.refNode_source, refNode_attn))
 
         self.final_loss = -tf.reduce_sum(tf.log(tf.maximum(self.pred[0], self.thr)), 1)
@@ -424,57 +428,57 @@ class Learner(object):
         probs = probs.reshape(-1, self.num_entity)
         return probs.tolist()
 
+
     def create_dummy_probs_for_prediction(self, probs):
         return [prob[0] for prob in probs]
 
 
 
-    def update(self, sess, qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, valid_ref_event_idx):
-        to_fetch = [self.final_loss, self.optimizer_step]
-        fetched = self._run_graph(sess, qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, 'Train', to_fetch)
-
+    def update(self, sess, inputs):
+        if self.flag_acceleration:
+            qq, refNode_source, res_random_walk, probs = inputs 
+            to_fetch = [self.final_loss, self.optimizer_step]
+            fetched = self._run_graph_acc(sess, qq, refNode_source, res_random_walk, probs, to_fetch)
+        else:
+            qq, hh, tt, mdb, connectivity, probs, valid_sample_idx = inputs
+            to_fetch = [self.final_loss, self.optimizer_step]
+            fetched = self._run_graph(sess, qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, 'Train', to_fetch)
         return fetched[0]
 
 
 
-    def predict(self, sess, qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, valid_ref_event_idx):
-        to_fetch = [self.state_vector, self.attn_refType]
-        fetched = self._run_graph(sess, qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, 'Test', to_fetch)
+    def predict(self, sess, inputs):
+        if self.flag_acceleration:
+            qq, refNode_source, res_random_walk, probs = inputs
+            to_fetch = [self.pred]
+            fetched = self._run_graph_acc(sess, qq, refNode_source, res_random_walk, probs, to_fetch)
+            return fetched[0]
+        else:
+            qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, valid_ref_event_idx = inputs
+            to_fetch = [self.state_vector, self.attn_refType]
+            fetched = self._run_graph(sess, qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, 'Test', to_fetch)
 
-        # [tqs, tqe] X [last_event, first_event]
-        state_vector = []
-        for i in range(2*(int(self.flag_int)+1)):
-            state_vector.append(np.expand_dims(fetched[0][i%2] * valid_ref_event_idx[i], axis=2))
+            # [tqs, tqe] X [last_event, first_event]
+            state_vector = []
+            for i in range(2*(int(self.flag_int)+1)):
+                state_vector.append(np.expand_dims(fetched[0][i%2] * valid_ref_event_idx[i], axis=2))
 
-        # Todo: check the order
-        pred = []
-        for i in range(int(self.flag_int)+1):
-            input_prob = []
-            for j in range(4):
-                input_prob.append(np.array([probs[j][idx] for idx in valid_sample_idx]))
-                
-            pred.append(fetched[1][3*i+2][:, 0:1] *np.sum((np.expand_dims(fetched[1][3*i][:, 0:1], axis=2) * input_prob[4*i] + \
-                                                           np.expand_dims(fetched[1][3*i+1][:, 1:2], axis=2) * input_prob[4*i+1]) \
-                                                           * state_vector[0], axis = 1) + \
-                        fetched[1][3*i+2][:, 1:2] *np.sum((np.expand_dims(fetched[1][3*i+2][:, 0:1], axis=2) * input_prob[4*i+2] + \
-                                                           np.expand_dims(fetched[1][3*i+3][:, 1:2], axis=2) * input_prob[4*i+3]) \
-                                                           * state_vector[1], axis = 1))
+            # Todo: check the order
+            pred = []
+            for i in range(int(self.flag_int)+1):
+                input_prob = []
+                for j in range(4):
+                    input_prob.append(np.array([probs[j][idx] for idx in valid_sample_idx]))
+                    
+                pred.append(fetched[1][3*i+2][:, 0:1] *np.sum((np.expand_dims(fetched[1][3*i][:, 0:1], axis=2) * input_prob[4*i] + \
+                                                            np.expand_dims(fetched[1][3*i+1][:, 1:2], axis=2) * input_prob[4*i+1]) \
+                                                            * state_vector[0], axis = 1) + \
+                            fetched[1][3*i+2][:, 1:2] *np.sum((np.expand_dims(fetched[1][3*i+2][:, 0:1], axis=2) * input_prob[4*i+2] + \
+                                                            np.expand_dims(fetched[1][3*i+3][:, 1:2], axis=2) * input_prob[4*i+3]) \
+                                                            * state_vector[1], axis = 1))
 
-        return pred
+            return pred
 
-
-
-
-    def update_acc(self, sess, qq, refNode_source, res_random_walk, probs):
-        to_fetch = [self.final_loss, self.optimizer_step]
-        fetched = self._run_graph_acc(sess, qq, refNode_source, res_random_walk, probs, to_fetch)
-        return fetched[0]
-
-
-    def predict_acc(self, sess, qq, refNode_source, res_random_walk, probs):
-        to_fetch = [self.pred]
-        fetched = self._run_graph_acc(sess, qq, refNode_source, res_random_walk, probs, to_fetch)
-        return fetched[0]
 
 
     def get_rule_scores_acc(self, sess):

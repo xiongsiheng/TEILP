@@ -22,6 +22,17 @@ class TEKG_params():
         self.edges = np.vstack((self.data['train_edges'], self.data['valid_edges'], self.data['test_edges']))
 
 
+class TEKG():
+    def __init__(self, option, data):
+        if option.flag_acceleration:
+            if data['dataset_name'] in ['icews14', 'icews05-15', 'gdelt']:
+                self.graph = TEKG_timestamp_acc_ver(option, data)
+            else:
+                self.graph = TEKG_int_acc_ver(option, data)
+        else:
+            self.graph = TEKG_normal_ver(option, data)
+
+
 
 class TEKG_int_acc_ver(TEKG_params):
     def _initialize_walk_res(self, idx_ls, mode):
@@ -52,7 +63,7 @@ class TEKG_int_acc_ver(TEKG_params):
         else:
             preprocessor = Data_preprocessor()
             # for test mode, there is no pre-processing
-            output = preprocessor.create_inputs_interval_ver(edges=self.edges, path=self.data['path'], 
+            output = preprocessor.prepare_inputs_interval_ver(edges=self.edges, path=self.data['path'], 
                                          dataset=self.data['dataset_name'], 
                                          idx_ls=idx_ls,
                                          pattern_ls=self.data['pattern_ls'], 
@@ -212,6 +223,14 @@ class TEKG_int_acc_ver(TEKG_params):
         valid_sample_idxs, valid_query_relations, refNode_sources, valid_rule_idx, probabilities = self._process_edges(idx_ls, random_walk_res, mode, query_relations)
 
         return query_relations, valid_query_relations, refNode_sources, valid_rule_idx, probabilities, valid_sample_idxs, query_intervals, [], []
+
+
+  
+
+        
+
+
+  
 
 
 
@@ -532,9 +551,7 @@ class TEKG_timestamp_acc_ver(TEKG_params):
 
 
 
-
-
-class TEKG(TEKG_params):
+class TEKG_normal_ver(TEKG_params):
     def _build_mdb(self, edges, num_entity, num_rel):
         """Build the mdb dictionary based on current relations and entities."""
         mdb = {}
@@ -585,12 +602,7 @@ class TEKG(TEKG_params):
         return connectivity
 
 
-    def _get_current_edge_index(self, edge, flag_use_batch_graph, batch_edges, batch_edges_idx_cmp, TEKG_nodes):
-        edge_transform = [edge[j] for j in [0,1,4,2,3]]
-        if flag_use_batch_graph:
-            return batch_edges_idx_cmp[batch_edges.tolist().index(edge_transform)]
-        else:
-            return TEKG_nodes.tolist().index(edge_transform)
+
 
 
     def _initialize_probabilities(self, num_samples, num_entities, num_steps, timestamp_range, mode):
@@ -710,12 +722,17 @@ class TEKG(TEKG_params):
         return flag_valid
 
 
-    def _update_event_probabilities(self, i, events, flag_use_batch_graph, batch_edges, batch_edges_idx_cmp, TEKG_nodes, num_step, mode, ts_probs, te_probs, ref_event_idx_ts, ref_event_idx_te):
+    def _update_event_probabilities(self, idx_first_or_last_event, probs, flag_use_batch_graph, batch_edges, batch_edges_idx_cmp, TEKG_nodes, 
+                                    num_step, mode, ts_probs, te_probs, ref_event_idx):
+        # probs[data_idx][idx_first_or_last_event][str_tuple(edge)][2*idx_ts_or_te + idx_ref_time_ts_or_te]
         flag_valid = 0  # Initialize flag_valid
-        for _, event_value in events.items():
-            for edge in event_value:
-                cur_edge_idx = self._get_current_edge_index(edge, flag_use_batch_graph, batch_edges, batch_edges_idx_cmp, TEKG_nodes)
-                flag_valid |= self._update_probabilities_for_edge(i, edge, event_value, cur_edge_idx, num_step, mode, ts_probs, te_probs, ref_event_idx_ts, ref_event_idx_te)
+     
+        for edge in probs[idx_first_or_last_event]:
+            cur_edge_idx = batch_edges_idx_cmp[batch_edges.tolist().index([edge[j] for j in [0,1,4,2,3]])] if flag_use_batch_graph else \
+                           TEKG_nodes.tolist().index([edge[j] for j in [0,1,4,2,3]])
+            
+
+
         return flag_valid
 
 
@@ -724,7 +741,7 @@ class TEKG(TEKG_params):
         mdb = copy.copy(self.data['mdb'])
         connectivity = copy.copy(self.data['connectivity'])
         TEKG_nodes = copy.copy(self.data['TEKG_nodes'])
-        output_probs_with_ref_edges = copy.copy(self.data['random_walk_res'])
+        probs = copy.copy(self.data['random_walk_res'])
 
         flag_use_batch_graph = False
         if (mdb is None) or (connectivity is None) or (TEKG_nodes is None):
@@ -736,20 +753,22 @@ class TEKG(TEKG_params):
         for data_idx in idx_ls:
             file_path = "{}{}_train_query_{}.json".format(self.data['path'], self.data['dataset_name'], data_idx)
             with open(file_path, 'r') as f:
-                json_data = json.load(f)
-            self._process_json_data(json_data, query_edges, input_intervals, batch_edges)
+                data = json.load(f)
+            self._process_json_data(data, query_edges, input_intervals, batch_edges)
 
 
         if flag_use_batch_graph:
             batch_edges = self._unique_edges(batch_edges)
             batch_edges_inv = self._inverse_edges(batch_edges, self.data['num_rel'])
             batch_edges = self._unique_edges(np.vstack((batch_edges, batch_edges_inv)))  # Combine and get unique edges again
+            
             assert len(batch_edges) <= self.data['num_entity'] // 2, 'Increase num_entity or reduce edges.'
+            
             mdb = self._build_mdb(batch_edges, self.data['num_entity'], self.data['num_rel'])
             connectivity = self._calculate_connectivity(batch_edges, self.data['num_entity'])
 
 
-        if output_probs_with_ref_edges is None:
+        if probs is None:
             preprocessor = Data_preprocessor()
             output = preprocessor.create_inputs_interval_ver(edges=edges, path=self.data['path'], 
                                             dataset=self.data['dataset_name'], 
@@ -765,7 +784,7 @@ class TEKG(TEKG_params):
                                             flag_output_probs_with_ref_edges=True,
                                             flag_rule_split=self.option.flag_ruleLen_split_ver)
 
-            output_probs_with_ref_edges = output[-1]
+            probs = output[-1]
 
             if mode == 'Test':
                 input_intervals_dict = output[-2]
@@ -778,18 +797,13 @@ class TEKG(TEKG_params):
 
 
         qq = [query[1] for query in query_edges]
-        if flag_use_batch_graph:
-            hh = [batch_edges_ori.tolist().index(query) for query in query_edges]
-        else:
-            hh = [TEKG_nodes.tolist().index(query) for query in query_edges]
-
+        hh = [batch_edges_ori.tolist().index(query) for query in query_edges] if flag_use_batch_graph else [TEKG_nodes.tolist().index(query) for query in query_edges]
         tt = [h + self.data['num_entity']//2 for h in hh]
 
 
         ts_probs_first_event, te_probs_first_event, ts_probs_last_event, te_probs_last_event = self._initialize_probabilities(
-            len(idx_ls), self.data['num_entity'], num_step, self.data['timestamp_range'], mode
-        )
-
+                                            len(idx_ls), self.data['num_entity'], num_step, self.data['timestamp_range'], mode
+                                        )
 
         valid_sample_idx, valid_ref_event_idx_ts_first, valid_ref_event_idx_ts_last, valid_ref_event_idx_te_first, valid_ref_event_idx_te_last = [], [], [], [], []
 
@@ -798,17 +812,16 @@ class TEKG(TEKG_params):
             if mode == 'Test':
                 data_idx -= self.data['num_samples_dist'][1]
 
-            if data_idx not in output_probs_with_ref_edges:
+            if data_idx not in probs:
                 continue
 
-            ref_event_idx_ts_first, ref_event_idx_ts_last, ref_event_idx_te_first, ref_event_idx_te_last = np.zeros((self.data['num_entity'],)), np.zeros((self.data['num_entity'],)), \
-                                                                                        np.zeros((self.data['num_entity'],)), np.zeros((self.data['num_entity'],))
+            ref_event_idx = np.zeros((4, self.data['num_entity']))
 
-            flag_valid |= self._update_event_probabilities(output_probs_with_ref_edges[data_idx]['first_event'], flag_use_batch_graph, batch_edges, 
+            flag_valid |= self._update_event_probabilities(i, probs[data_idx]['0'], flag_use_batch_graph, batch_edges, 
                                                             batch_edges_idx_cmp, TEKG_nodes, num_step, mode, 
                                                             ts_probs_first_event, te_probs_first_event, ref_event_idx_ts_first, ref_event_idx_te_first)
 
-            flag_valid |= self._update_event_probabilities(output_probs_with_ref_edges[data_idx]['last_event'], flag_use_batch_graph, batch_edges, 
+            flag_valid |= self._update_event_probabilities(probs[data_idx]['1'], flag_use_batch_graph, batch_edges, 
                                                             batch_edges_idx_cmp, TEKG_nodes, num_step, mode, 
                                                             ts_probs_last_event, te_probs_last_event, ref_event_idx_ts_last, ref_event_idx_te_last)
 

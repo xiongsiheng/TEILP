@@ -9,7 +9,7 @@ from datetime import datetime
 from joblib import Parallel, delayed
 
 from Walker_with_sampling import Grapher, Temporal_Walk
-from utils import process_random_walk_with_sampling_results
+from utlis import process_random_walk_with_sampling_results
 
 
 

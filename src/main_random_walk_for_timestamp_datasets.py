@@ -100,17 +100,20 @@ pos_examples = my_shuffle(data.train_idx)
 temporal_walk = Temporal_Walk(BG_idx, data.inv_relation_id, transition_distr, flag_interval=False)
 
 
-# possible temporal relations for different rule lengths
-TR_ls_dict = {i: [] for i in range(1, 6)}
-TR1_list = ['ukn']
-TR2_list = TR3_list = TR4_list = TR5_list = ['bf', 'touch', 'af']
-TR_ls_dict[1] = [[TR1] for TR1 in TR1_list]
-TR_ls_dict[2] = [[TR1, TR2] for TR1 in TR1_list for TR2 in TR2_list]
-TR_ls_dict[3] = [[TR1, TR2, TR3] for TR1 in TR1_list for TR2 in TR2_list for TR3 in TR3_list]
-TR_ls_dict[4] = [[TR1, TR2, TR3, TR4] for TR1 in TR1_list for TR2 in TR2_list for TR3 in TR3_list for TR4 in TR4_list]
-TR_ls_dict[5] = [[TR1, TR2, TR3, TR4, TR5] for TR1 in TR1_list for TR2 in TR2_list for TR3 in TR3_list for TR4 in TR4_list for TR5 in TR5_list]
+def prepare_TR_ls_dict():
+    # possible temporal relations for different rule lengths
+    TR_ls_dict = {i: [] for i in range(1, 6)}
+    TR1_list = ['ukn']
+    TR2_list = TR3_list = TR4_list = TR5_list = ['bf', 'touch', 'af']
+    TR_ls_dict[1] = [[TR1] for TR1 in TR1_list]
+    TR_ls_dict[2] = [[TR1, TR2] for TR1 in TR1_list for TR2 in TR2_list]
+    TR_ls_dict[3] = [[TR1, TR2, TR3] for TR1 in TR1_list for TR2 in TR2_list for TR3 in TR3_list]
+    TR_ls_dict[4] = [[TR1, TR2, TR3, TR4] for TR1 in TR1_list for TR2 in TR2_list for TR3 in TR3_list for TR4 in TR4_list]
+    TR_ls_dict[5] = [[TR1, TR2, TR3, TR4, TR5] for TR1 in TR1_list for TR2 in TR2_list for TR3 in TR3_list for TR4 in TR4_list for TR5 in TR5_list]
+    return TR_ls_dict
 
 
+TR_ls_dict = prepare_TR_ls_dict()
 
 
 

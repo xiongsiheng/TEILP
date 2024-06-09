@@ -3,6 +3,7 @@ import os
 import time
 import numpy as np
 from tqdm import tqdm
+from joblib import Parallel, delayed
 from utlis import *
 from Graph import *
 
@@ -35,160 +36,105 @@ class Experiment():
             self.metrics = ['MAE']
 
 
-    def one_epoch(self, mode, total_idx=None):
-        epoch_loss = []
-        epoch_eval_aeIOU = []
-        epoch_eval_TAC = []
-        epoch_eval_MAE = []
+    def _calculate_output(self, myTEKG, run_fn, batch_idx_ls, mode, flag_rm_seen_ts, train_edges, timestamp_range, pred_dur_dict):
+        '''
+        Calculate the output of the model for a batch of data.
+        '''
+        if self.option.flag_acceleration:
+            qq, query_rels, refNode_source, res_random_walk, probs, valid_sample_idx, input_intervals, input_samples, ref_time_ls = myTEKG.graph.create_graph(batch_idx_ls, mode)
+        else:
+            qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, valid_ref_event_idx, input_intervals, input_samples = myTEKG.graph.create_graph(batch_idx_ls, mode)
+        
+        if len(valid_sample_idx) == 0:
+            return []
 
-        batch_size = 32
-
-        if mode == "Train":
-            random.shuffle(self.data['train_idx_ls'])
-            idx_ls = split_list_into_batches(self.data['train_idx_ls'], batch_size)
-        elif mode == "Test":
-            test_idx_ls = total_idx
-            if test_idx_ls is None:
-                test_idx_ls = self.data['test_idx_ls']
-            idx_ls = split_list_into_batches(test_idx_ls, batch_size)
-
-        # save_data(self.option.savetxt, len(idx_ls))
-
-        timestamp_range = self.data['timestamp_range']
-
-        flag_rm_seen_ts = False # rm seen ts in training set
-        if self.data['dataset_name'] in ['icews14', 'icews05-15', 'gdelt'] and not self.option.shift:
-            flag_rm_seen_ts = True
-            train_edges = self.data['train_edges']
-
-        if self.option.flag_use_dur:
-            pred_dur_dict = self.data['pred_dur']
-
+        probs = np.array(probs).transpose(1, 0, 2)
+        input_intervals = np.array(input_intervals)
 
         if self.option.flag_acceleration:
-            if self.data['dataset_name'] in ['icews14', 'icews05-15', 'gdelt']:
-                model = TEKG_timestamp_acc_ver(self.option, self.data)
-            else:
-                model = TEKG_int_acc_ver(self.option, self.data)
+            inputs = [query_rels, refNode_source, res_random_walk, probs]
         else:
-            model = TEKG(self.option, self.data)
+            inputs = [qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, valid_ref_event_idx]
+
+        output = run_fn(self.sess, inputs)
+
+        preds = []
+        gts = []
+        if mode == "Test":
+            for prob_t in output:
+                # prob_t: shape: (dummy_batch_size, num_timestamp)
+                prob_t = prob_t.reshape(-1)
+                prob_t = np.array(split_list_into_batches(prob_t, len(timestamp_range)))
+                prob_t = self._rm_seen_time(flag_rm_seen_ts, valid_sample_idx, input_samples, prob_t, train_edges, timestamp_range)
+                preds.append(prob_t)
+            preds = self._adjust_preds_based_on_dur(preds, batch_idx_ls, valid_sample_idx, pred_dur_dict, qq)
+            
+            gts = input_intervals[valid_sample_idx]
+
+        return output, preds, gts
 
 
-        for i, batch_idx_ls in enumerate(tqdm(idx_ls, desc=mode)):
-            if self.option.flag_acceleration:
-                if mode == "Train":
-                    run_fn = self.learner.update_acc
-                else:
-                    run_fn = self.learner.predict_acc
-            else:
-                if mode == "Train":
-                    run_fn = self.learner.update
-                else:
-                    run_fn = self.learner.predict
+    def _rm_seen_time(self, flag_rm_seen_ts, valid_sample_idx, input_samples, prob_t, train_edges, timestamp_range):
+        if flag_rm_seen_ts:
+            input_samples = input_samples[valid_sample_idx]
+            prob_t_new = []
+            for idx in range(len(prob_t)):
+                cur_prob_t = prob_t[idx]
+                seen_ts = train_edges[np.all(train_edges[:, :3] == input_samples[idx, :3], axis=1), 3]
+                seen_ts = [timestamp_range.tolist().index(ts) for ts in seen_ts if ts in timestamp_range.tolist()]
+                cur_prob_t[seen_ts] = 0
+                
+                pred_t = timestamp_range[np.argmax(cur_prob_t)]
+                prob_t_new.append(pred_t)
+
+            prob_t = np.array(prob_t_new).reshape((-1, 1))
+        else:
+            prob_t = timestamp_range[np.argmax(prob_t, axis=1)].reshape((-1, 1))
+        return prob_t
 
 
-            if self.option.flag_acceleration:
-                qq, query_rels, refNode_source, res_random_walk, probs, valid_sample_idx, input_intervals, input_samples, ref_time_ls = model.create_graph(batch_idx_ls, mode)
-            else:
-                qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, valid_ref_event_idx, input_intervals, input_samples = model.create_graph(batch_idx_ls, mode)
+    def _adjust_preds_based_on_dur(self, preds, batch_idx_ls, valid_sample_idx, pred_dur_dict, qq):
+        if self.option.flag_use_dur:
+            pred_ts, pred_te = preds[0], preds[1]
+            pred_dur = []
+            for data_idx in np.array(batch_idx_ls)[valid_sample_idx]:
+                pred_dur1 = pred_dur_dict[str(data_idx - self.data['num_samples_dist'][1])]
+                pred_dur.append(abs(pred_dur1[1] - pred_dur1[0]))
 
-            # save_data(self.option.savetxt, 'TEKG_prepared!')
+            pred_te = pred_ts + np.array(pred_dur).reshape((-1, 1))
+            preds = np.hstack([pred_ts, pred_te])
+        
+        if self.data['rel_ls_no_dur'] is not None:
+            preds = np.hstack(preds)
+            qq = np.array(qq)[valid_sample_idx]
+            x_tmp = preds[np.isin(qq, self.data['rel_ls_no_dur'])]
+            x_tmp = np.mean(x_tmp, axis=1).reshape((-1,1))
+            preds[np.isin(qq, self.data['rel_ls_no_dur'])] = np.hstack((x_tmp, x_tmp))
 
-            if len(valid_sample_idx) == 0:
-                continue
-
-            probs = np.array(probs).transpose(1, 0, 2)
-            # print(probs.shape)
-
-            input_intervals = np.array(input_intervals)
-
-            # print(probs)
-            # print(ref_time_ls)
+        return preds
 
 
-            if self.option.flag_acceleration:
-                output = run_fn(self.sess, query_rels, refNode_source, res_random_walk, probs)
-            else:
-                output = run_fn(self.sess, qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, valid_ref_event_idx)
+    def one_batch(self, batch_size, idx_ls, mode, flag_rm_seen_ts):
+        epoch_loss, epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE = [], [], [], []
+        myTEKG = TEKG(self.option, self.data)
+        run_fn = self.learner.update if mode == "Train" else self.learner.predict
 
-            # save_data(self.option.savetxt, 'model processed!')
-            # print(output)
+        timestamp_range = self.data['timestamp_range']
+        train_edges = self.data['train_edges']
+        pred_dur_dict = self.data['pred_dur'] if self.option.flag_use_dur else None
 
+        idx_ls = split_list_into_batches(idx_ls, batch_size)
+        for batch_idx_ls in tqdm(idx_ls, desc=mode):
+            output, preds, gts = self._calculate_output(myTEKG, run_fn, batch_idx_ls, mode, flag_rm_seen_ts, train_edges, timestamp_range, pred_dur_dict)
             if mode == "Train":
                 epoch_loss += list(output)
-                # save_data(self.option.savetxt, i)
-                # save_data(self.option.savetxt, output)
             else:
-                prob_ts = output[0].reshape(-1)
-                prob_ts = np.array(split_list_into_batches(prob_ts, len(timestamp_range)))
-
-                if flag_rm_seen_ts:
-                    input_samples = input_samples[valid_sample_idx]
-                    preds = []
-                    for idx in range(len(prob_ts)):
-                        cur_prob_ts = prob_ts[idx]
-                        seen_ts = train_edges[np.all(train_edges[:, :3] == input_samples[idx, :3], axis=1), 3]
-                        seen_ts = [timestamp_range.tolist().index(ts) for ts in seen_ts if ts in timestamp_range.tolist()]
-                        cur_prob_ts[seen_ts] = 0
-                        pred_ts = timestamp_range[np.argmax(cur_prob_ts)]
-                        preds.append(pred_ts)
-                    preds = np.array(preds).reshape((-1, 1))
-                else:
-                    pred_ts = timestamp_range[np.argmax(prob_ts, axis=1)].reshape((-1, 1))
-                    preds = pred_ts.copy()
-
-                # print(timestamp_range)
-                # print(np.argmax(prob_ts, axis=1))
-                # print(timestamp_range[np.argmax(prob_ts, axis=1)])
-
-                if self.option.flag_interval:
-                    prob_te = output[1].reshape(-1)
-                    prob_te = np.array(split_list_into_batches(prob_te, len(timestamp_range)))
-
-                    pred_te = timestamp_range[np.argmax(prob_te, axis=1)].reshape((-1, 1))
-
-                    if self.option.flag_use_dur:
-                        pred_dur = []
-                        for data_idx in np.array(batch_idx_ls)[valid_sample_idx]:
-                            pred_dur1 = pred_dur_dict[str(data_idx - self.data['num_samples_dist'][1])]
-                            pred_dur.append(abs(pred_dur1[1] - pred_dur1[0]))
-
-                        pred_te = pred_ts + np.array(pred_dur).reshape((-1, 1))
-
-                    preds = np.hstack([pred_ts, pred_te])
-
-                    # print(preds)
-                    # print(valid_sample_idx)
-                    # print(input_intervals[valid_sample_idx])
-
-                    if self.data['rel_ls_no_dur'] is not None:
-                        qq = np.array(qq)[valid_sample_idx]
-                        x_tmp = preds[np.isin(qq, self.data['rel_ls_no_dur'])]
-                        x_tmp = np.mean(x_tmp, axis=1).reshape((-1,1))
-                        preds[np.isin(qq, self.data['rel_ls_no_dur'])] = np.hstack((x_tmp, x_tmp))
-
-
-                # save_data(self.option.savetxt, i)
-                # save_data(self.option.savetxt, preds)
-                # save_data(self.option.savetxt, input_intervals[valid_sample_idx])
-
-
                 if 'aeIOU' in self.metrics:
-                    epoch_eval_aeIOU += obtain_aeIoU(preds, input_intervals[valid_sample_idx])
-                    # print(obtain_aeIoU(preds, input_intervals[valid_sample_idx]))
-
+                    epoch_eval_aeIOU += obtain_aeIoU(preds, gts)
                 if 'TAC' in self.metrics:
-                    epoch_eval_TAC += obtain_TAC(preds, input_intervals[valid_sample_idx])
-                    # print(obtain_TAC(preds, input_intervals[valid_sample_idx]))
-
+                    epoch_eval_TAC += obtain_TAC(preds, gts)
                 if 'MAE' in self.metrics:
-                    # preds = np.array(ref_time_ls)
-                    epoch_eval_MAE += np.abs(np.array(preds).reshape(-1) - input_intervals[valid_sample_idx].reshape(-1)).tolist()
-                    # print(np.abs(np.array(preds).reshape(-1) - input_intervals[valid_sample_idx].reshape(-1)).tolist())
-                    # print(preds.reshape(-1), input_intervals[valid_sample_idx].reshape(-1))
-                    # print(np.abs(np.array(ref_time_ls).reshape(-1) - input_intervals[valid_sample_idx].reshape(-1)).tolist())
-                    # print(np.array(ref_time_ls).reshape(-1), input_intervals[valid_sample_idx].reshape(-1))
-            # print('----------------------------')
+                    epoch_eval_MAE += np.abs(np.array(preds).reshape(-1) - gts.reshape(-1)).tolist()
 
         if mode == "Train":
             if len(epoch_loss) == 0:
@@ -200,20 +146,37 @@ class Experiment():
             self.log_file.write(msg + "\n")
             print("Epoch %d mode %s Loss %0.4f " % (self.epoch+1, mode, np.mean(epoch_loss)))
             return epoch_loss
-
         else:
-            epoch_eval = [epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE]
-
-            return epoch_eval
+            return epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE
 
 
-    def one_epoch_train(self):
-        loss = self.one_epoch("Train")
+    def one_epoch(self, mode, total_idx=None, batch_size=32):
+        flag_rm_seen_ts = False # rm seen ts in training set
+        if self.data['dataset_name'] in ['icews14', 'icews05-15', 'gdelt'] and not self.option.shift:
+            flag_rm_seen_ts = True
+
+        if mode == "Train":
+            idx_ls = total_idx if total_idx is not None else self.data['train_idx_ls']
+            random.shuffle(idx_ls)
+            epoch_loss = self.one_batch(batch_size, idx_ls, mode, flag_rm_seen_ts)
+            return epoch_loss   
+        elif mode == "Valid":
+            idx_ls = total_idx if total_idx is not None else self.data['valid_idx_ls']
+            epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE = self.one_batch(batch_size, idx_ls, mode, flag_rm_seen_ts)
+            return [epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE]
+        else:
+            idx_ls = total_idx if total_idx is not None else self.data['test_idx_ls']
+            epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE = self.one_batch(batch_size, idx_ls, mode, flag_rm_seen_ts)
+            return [epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE]
+
+
+    def one_epoch_train(self, total_idx=None):
+        loss = self.one_epoch("Train", total_idx=total_idx)
         self.train_stats.append([loss])
 
 
-    def one_epoch_valid(self):
-        eval1 = self.one_epoch("Valid")
+    def one_epoch_valid(self, total_idx=None):
+        eval1 = self.one_epoch("Valid", total_idx=total_idx)
         self.valid_stats.append([eval1])
         self.best_valid_eval1 = max(self.best_valid_eval1, np.mean(eval1[0]))
 
@@ -235,9 +198,9 @@ class Experiment():
             else:
                 return True
 
-    def train(self):
+    def train(self, total_idx=None):
         while (self.epoch < self.option.max_epoch and not self.early_stopped):
-            self.one_epoch_train()
+            self.one_epoch_train(total_idx=total_idx)
 
             self.epoch += 1
             model_path = self.saver.save(self.sess, 

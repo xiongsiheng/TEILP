@@ -12,7 +12,7 @@ from utlis import *
 
 
 class Data_preprocessor():
-    def prepare_data(self, option):
+    def prepare_data(self, option, save_option=True):
         data = {}
         dataset_index = ['wiki', 'YAGO', 'icews14', 'icews05-15', 'gdelt100'].index(option.dataset)
 
@@ -65,45 +65,50 @@ class Data_preprocessor():
 
         data['rel_ls_no_dur'] = [[4, 16, 17, 20], [0, 7], None, None, None][dataset_index]
 
-        # todo: shift mode
+        # Todo: time shift mode
         with open('../data/'+ data['dataset_name'] +'_time_pred_eval_rm_idx.json', 'r') as file:
             data['rm_ls'] = json.load(file)
         if option.shift:
             with open('../data/'+ data['dataset_name'] +'_time_pred_eval_rm_idx_shift_mode.json', 'r') as file:
                 data['rm_ls'] = json.load(file)
 
-        if option.flag_acceleration:
-            data['mdb'], data['connectivity'], data['TEKG_nodes'] = None, None, None
-        else:
-            data['mdb'], data['connectivity'], data['TEKG_nodes'], data['num_entity'] = self.prepare_whole_TEKG_graph(data)
+        # if option.flag_acceleration:
+        #     data['mdb'], data['connectivity'], data['TEKG_nodes'] = None, None, None
+        # else:
+        #     data['mdb'], data['connectivity'], data['TEKG_nodes'], data['num_entity'] = self.prepare_whole_TEKG_graph(data)
 
-        # todo
-        if option.flag_use_dur:
-            with open("../output/"+ data['dataset_name'] + "_dur_preds.json", "r") as json_file:
-                data['pred_dur'] = json.load(json_file)
+        # We do not create the whole graph which is time-consuming.
+        data['mdb'], data['connectivity'], data['TEKG_nodes'] = None, None, None
 
 
-        option.this_expsdir = os.path.join(option.exps_dir, data['dataset_name'] + '_' + option.tag)
-        if not os.path.exists(option.this_expsdir):
-            os.makedirs(option.this_expsdir)
-        option.ckpt_dir = os.path.join(option.this_expsdir, "ckpt")
-        if not os.path.exists(option.ckpt_dir):
-            os.makedirs(option.ckpt_dir)
-        option.model_path = os.path.join(option.ckpt_dir, "model")
+        if save_option:
+            # Todo
+            if option.flag_use_dur:
+                with open("../output/"+ data['dataset_name'] + "_dur_preds.json", "r") as json_file:
+                    data['pred_dur'] = json.load(json_file)
 
-        option.num_step = [4, 6, 4, 4, 4][dataset_index]
-        option.num_rule = [1000, 6000, 10000, 10000, 10000][dataset_index]
-        option.flag_interval = True if dataset_index in [0, 1] else False
+            option.this_expsdir = os.path.join(option.exps_dir, data['dataset_name'] + '_' + option.tag)
+            if not os.path.exists(option.this_expsdir):
+                os.makedirs(option.this_expsdir)
+            option.ckpt_dir = os.path.join(option.this_expsdir, "ckpt")
+            if not os.path.exists(option.ckpt_dir):
+                os.makedirs(option.ckpt_dir)
+            option.model_path = os.path.join(option.ckpt_dir, "model")
 
-        option.savetxt = option.this_expsdir + '/intermediate_res.txt'
-        option.save()
-        print("Option saved.")
+            option.num_step = [4, 6, 4, 4, 4][dataset_index]
+            option.num_rule = [1000, 6000, 10000, 10000, 10000][dataset_index]
+            option.flag_interval = True if dataset_index in [0, 1] else False
+
+            option.savetxt = option.this_expsdir + '/intermediate_res.txt'
+            option.save()
+            print("Option saved.")
 
 
-        data['random_walk_res'] = None
-        if dataset_index in [0, 1] and option.train:
-            self.prepare_graph_random_walk_res(option, data, 'Train', num_workers=20, show_tqdm=True)
-        print("Data prepared.")
+            data['random_walk_res'] = None
+            if dataset_index in [0, 1] and option.train:
+                # This could be time-consuming. We recommend to save the results without rewriting.
+                self.prepare_graph_random_walk_res(option, data, 'Train', num_workers=20, show_tqdm=True, rewriting=False)
+            print("Data prepared.")
 
         return data
 
@@ -319,7 +324,7 @@ class Data_preprocessor():
                                     ts_stat_ls, te_stat_ls, mode=None, rm_ls=None, with_ref_end_time=True, 
                                     only_find_samples_with_empty_rules=False, flag_output_probs_with_ref_edges=False,
                                     flag_acceleration=False, flag_time_shift=False, write_to_file=False, show_tqdm=False,
-                                    flag_rule_split=False):            
+                                    flag_rule_split=False, rewriting=False):            
         
         input_intervals, probs = {}, {}
         sample_with_empty_rules_ls = []
@@ -329,13 +334,16 @@ class Data_preprocessor():
         for data_idx in idx_ls:
             if write_to_file:
                 input_intervals, probs = {}, {}
-
+                filename = dataset + '_idx_' + str(data_idx) + '_input.json'
+                if os.path.exists('../output/process_res/' + filename) and not rewriting:
+                    continue
+                    
             # read data
-            file = dataset + '_idx_' + str(data_idx) + '.json'
-            if not os.path.exists(path + file):
+            filename = dataset + '_idx_' + str(data_idx) + '.json'
+            if not os.path.exists(path + filename):
                 sample_with_empty_rules_ls.append(data_idx)
                 continue
-            with open(path + file, 'r') as f:
+            with open(path + filename, 'r') as f:
                 data = f.read()
                 json_data = json.loads(data)
 
@@ -413,8 +421,8 @@ class Data_preprocessor():
                 if flag_output_probs_with_ref_edges:
                     output.append(probs[data_idx])
 
-                file = dataset + '_idx_' + str(data_idx) + '_input.json'
-                with open('../output/process_res/' + file, 'w') as f:
+                filename = dataset + '_idx_' + str(data_idx) + '_input.json'
+                with open('../output/process_res/' + filename, 'w') as f:
                     json.dump(output, f)
 
             # Loop end for one sample
@@ -614,12 +622,12 @@ class Data_preprocessor():
         return edge_probs
 
 
-    def prepare_graph_random_walk_res(self, option, data, mode, num_workers=20, file_suffix='', show_tqdm=True):
+    def prepare_graph_random_walk_res(self, option, data, mode, num_workers=20, file_suffix='', show_tqdm=True, rewriting=False):
         dataset = data['dataset_name']
         if dataset in ['wiki', 'YAGO']:
             idx_ls = data['train_idx_ls'] if mode == 'Train' else data['test_idx_ls']
             idx_pieces = split_list_into_pieces(idx_ls, num_workers)
-            outputs = Parallel(n_jobs=num_workers)(delayed(self.create_TEKG_in_batch)(option, data, one_piece, mode, show_tqdm) for one_piece in idx_pieces)
+            outputs = Parallel(n_jobs=num_workers)(delayed(self.create_TEKG_in_batch)(option, data, one_piece, mode, show_tqdm, rewriting) for one_piece in idx_pieces)
 
             output_probs_with_ref_edges = {}
             for output in outputs:
@@ -676,7 +684,7 @@ class Data_preprocessor():
             return
 
 
-    def create_TEKG_in_batch(self, option, data, idx_ls, mode, show_tqdm):
+    def create_TEKG_in_batch(self, option, data, idx_ls, mode, show_tqdm, rewriting):
         path = data['path']
         dataset = data['dataset']
         dataset_name = data['dataset_name']
@@ -718,7 +726,8 @@ class Data_preprocessor():
                                                     flag_output_probs_with_ref_edges=True,
                                                     flag_acceleration=flag_acceleration,
                                                     flag_rule_split=option.flag_ruleLen_split_ver,
-                                                    show_tqdm=show_tqdm, write_to_file=write_to_file)
+                                                    show_tqdm=show_tqdm, write_to_file=write_to_file,
+                                                    rewriting=rewriting)
         return output[-1]
 
 
