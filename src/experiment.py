@@ -114,7 +114,7 @@ class Experiment():
         return preds
 
 
-    def one_batch(self, batch_size, idx_ls, mode, flag_rm_seen_ts):
+    def running_model(self, batch_size, idx_ls, mode, flag_rm_seen_ts):
         epoch_loss, epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE = [], [], [], []
         myTEKG = TEKG(self.option, self.data)
         run_fn = self.learner.update if mode == "Train" else self.learner.predict
@@ -158,15 +158,15 @@ class Experiment():
         if mode == "Train":
             idx_ls = total_idx if total_idx is not None else self.data['train_idx_ls']
             random.shuffle(idx_ls)
-            epoch_loss = self.one_batch(batch_size, idx_ls, mode, flag_rm_seen_ts)
+            epoch_loss = self.running_model(batch_size, idx_ls, mode, flag_rm_seen_ts)
             return epoch_loss   
         elif mode == "Valid":
             idx_ls = total_idx if total_idx is not None else self.data['valid_idx_ls']
-            epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE = self.one_batch(batch_size, idx_ls, mode, flag_rm_seen_ts)
+            epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE = self.running_model(batch_size, idx_ls, mode, flag_rm_seen_ts)
             return [epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE]
         else:
             idx_ls = total_idx if total_idx is not None else self.data['test_idx_ls']
-            epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE = self.one_batch(batch_size, idx_ls, mode, flag_rm_seen_ts)
+            epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE = self.running_model(batch_size, idx_ls, mode, flag_rm_seen_ts)
             return [epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE]
 
 
