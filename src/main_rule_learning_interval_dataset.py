@@ -13,6 +13,25 @@ from multiprocessing import Process, Queue
 
 
 
+
+def save_rule_scores(data, option, experiment):
+    rule_scores = experiment.get_rule_scores()
+
+    path_suffix = '_' if not option.shift else '_time_shifting_'
+    if not os.path.exists('../output/' + option.dataset + path_suffix[:-1]):
+        os.mkdir('../output/' + option.dataset + path_suffix[:-1])
+
+    for rel in range(data['num_rel']):
+        cur_path = '../output/' + option.dataset + path_suffix[:-1] + '/' + option.dataset + path_suffix
+        if option.shift and rel >= data['num_rel']//2:
+            cur_path += 'fix_ref_time_'
+        cur_path += 'rule_scores_rel_' + str(rel) + '.json'
+
+        with open(cur_path, 'w') as file:
+            json.dump(rule_scores[rel, :].tolist(), file)
+
+
+
 def run_experiment(queue, gpu, train, test, from_model_ckpt, dataset, num_step, num_layer, rnn_state_size, query_embed_size,
                    batch_size, print_per_batch, max_epoch, min_epoch, learning_rate, no_norm, thr, dropout, accuracy, top_k, shift, idx_ls):
     # Set up the experiment configuration
@@ -49,12 +68,12 @@ def run_experiment(queue, gpu, train, test, from_model_ckpt, dataset, num_step, 
     option.flag_use_dur = False
     option.flag_state_vec_enhancement = False
     option.prob_type_for_training = ['max', 'mean'][0]
- 
+
     os.environ["CUDA_VISIBLE_DEVICES"] = option.gpu
     tf.logging.set_verbosity(tf.logging.ERROR)
 
     processor = Data_preprocessor()
-    data = processor.prepare_data(option)
+    data = processor.prepare_data(option, process_walk_res=False)
 
     learner = Learner(option, data)
     print("Learner built.")
@@ -82,6 +101,8 @@ def run_experiment(queue, gpu, train, test, from_model_ckpt, dataset, num_step, 
             print("Start training...")
             experiment.train(idx_ls)
 
+            save_rule_scores(data, option, experiment)
+
         if option.test:
             eval_aeIOU, eval_TAC, _ = experiment.test(idx_ls)
             res = {'aeIOU': eval_aeIOU, 'TAC': eval_TAC}
@@ -92,6 +113,7 @@ def run_experiment(queue, gpu, train, test, from_model_ckpt, dataset, num_step, 
     if queue is not None:
         queue.put(res)
     print("="*36 + "Finish" + "="*36)
+
 
 
 
@@ -131,16 +153,19 @@ def main():
 
     if args.test:
         processor = Data_preprocessor()
-        data = processor.prepare_data(args, save_option=False)
+        data = processor.prepare_data(args, save_option=False, process_walk_res=False)
         queue = Queue()
         experiment_configs = []
-        # To accelerate the testing process, we split the test set into 20 pieces, and run the experiments in parallel.
-        for idx_ls in split_list_into_pieces(data['test_idx_ls'], 20):
+
+        # To accelerate the testing process, we split the test set into multiple pieces, and run the experiments in parallel.
+        for idx_ls in split_list_into_batches(data['test_idx_ls'], num_batches=20):
             config = {}
             config.update(vars(args))
             config['idx_ls'] = idx_ls
             config['queue'] = queue
             experiment_configs.append(config)
+
+        experiment_configs = experiment_configs[:1]
 
 
     processes = []
@@ -150,16 +175,24 @@ def main():
         p.start()
 
     for p in processes:
-        p.join()
+        if args.test:
+            p.join(timeout=900)  # Timeout after 900 seconds
+        else:
+            p.join()
 
     if args.test:
+        for p in processes:
+            if p.is_alive():
+                print("Process " + str(p.pid) + " is still running. Terminating.")
+                p.terminate()
+
         results = []
         while not queue.empty():
             results.append(queue.get())
         aeIOU = np.concatenate([res['aeIOU'] for res in results])
         TAC = np.concatenate([res['TAC'] for res in results])
-        print('aeIOU: ', np.mean(aeIOU))
-        print('TAC: ', np.mean(TAC))
+        print('aeIOU: ', np.mean(aeIOU), len(aeIOU))
+        print('TAC: ', np.mean(TAC), len(TAC))
 
 
 if __name__ == "__main__":

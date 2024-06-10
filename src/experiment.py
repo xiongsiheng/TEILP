@@ -3,7 +3,6 @@ import os
 import time
 import numpy as np
 from tqdm import tqdm
-from joblib import Parallel, delayed
 from utlis import *
 from Graph import *
 
@@ -41,16 +40,20 @@ class Experiment():
         Calculate the output of the model for a batch of data.
         '''
         if self.option.flag_acceleration:
-            qq, query_rels, refNode_source, res_random_walk, probs, valid_sample_idx, input_intervals, input_samples, ref_time_ls = myTEKG.graph.create_graph(batch_idx_ls, mode)
+            # Shape: qq: [] * dummy_batch_size (num_events);  refNode_source: [(dummy_batch_size,)] * batch_size;
+            #        res_random_walk: (num_rules_in_total_for_different_events, 2); [event_idx, rule_idx]
+            #        probs: [[(num_timestamp, )] * dummy_batch_size ] * 8
+            qq, query_rels, refNode_source, res_random_walk, probs, valid_sample_idx, input_intervals, input_samples, _ = myTEKG.graph.create_graph(batch_idx_ls, mode)
         else:
             qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, valid_ref_event_idx, input_intervals, input_samples = myTEKG.graph.create_graph(batch_idx_ls, mode)
         
+        # print(refNode_source[0].shape)
+
         if len(valid_sample_idx) == 0:
-            return []
+            return [], [], []
 
         probs = np.array(probs).transpose(1, 0, 2)
-        input_intervals = np.array(input_intervals)
-
+        
         if self.option.flag_acceleration:
             inputs = [query_rels, refNode_source, res_random_walk, probs]
         else:
@@ -58,18 +61,18 @@ class Experiment():
 
         output = run_fn(self.sess, inputs)
 
-        preds = []
-        gts = []
+        preds, gts = [], []
         if mode == "Test":
+            # Obtain the predictions from the output.
             for prob_t in output:
                 # prob_t: shape: (dummy_batch_size, num_timestamp)
                 prob_t = prob_t.reshape(-1)
-                prob_t = np.array(split_list_into_batches(prob_t, len(timestamp_range)))
+                prob_t = np.array(split_list_into_batches(prob_t, batch_size=len(timestamp_range)))
                 prob_t = self._rm_seen_time(flag_rm_seen_ts, valid_sample_idx, input_samples, prob_t, train_edges, timestamp_range)
                 preds.append(prob_t)
             preds = self._adjust_preds_based_on_dur(preds, batch_idx_ls, valid_sample_idx, pred_dur_dict, qq)
             
-            gts = input_intervals[valid_sample_idx]
+            gts = np.array(input_intervals)[valid_sample_idx]
 
         return output, preds, gts
 
@@ -123,7 +126,7 @@ class Experiment():
         train_edges = self.data['train_edges']
         pred_dur_dict = self.data['pred_dur'] if self.option.flag_use_dur else None
 
-        idx_ls = split_list_into_batches(idx_ls, batch_size)
+        idx_ls = split_list_into_batches(idx_ls, batch_size=batch_size)
         for batch_idx_ls in tqdm(idx_ls, desc=mode):
             output, preds, gts = self._calculate_output(myTEKG, run_fn, batch_idx_ls, mode, flag_rm_seen_ts, train_edges, timestamp_range, pred_dur_dict)
             if mode == "Train":
@@ -151,7 +154,7 @@ class Experiment():
 
 
     def one_epoch(self, mode, total_idx=None, batch_size=32):
-        flag_rm_seen_ts = False # rm seen ts in training set
+        flag_rm_seen_ts = False # remove seen ts in training set
         if self.data['dataset_name'] in ['icews14', 'icews05-15', 'gdelt'] and not self.option.shift:
             flag_rm_seen_ts = True
 
@@ -162,26 +165,26 @@ class Experiment():
             return epoch_loss   
         elif mode == "Valid":
             idx_ls = total_idx if total_idx is not None else self.data['valid_idx_ls']
-            epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE = self.running_model(batch_size, idx_ls, mode, flag_rm_seen_ts)
-            return [epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE]
         else:
             idx_ls = total_idx if total_idx is not None else self.data['test_idx_ls']
-            epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE = self.running_model(batch_size, idx_ls, mode, flag_rm_seen_ts)
-            return [epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE]
+
+        epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE = self.running_model(batch_size, idx_ls, mode, flag_rm_seen_ts)
+        
+        return [epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE]
 
 
     def one_epoch_train(self, total_idx=None):
-        loss = self.one_epoch("Train", total_idx=total_idx)
+        loss = self.one_epoch("Train", total_idx=total_idx, batch_size=8)
         self.train_stats.append([loss])
 
 
     def one_epoch_valid(self, total_idx=None):
-        eval1 = self.one_epoch("Valid", total_idx=total_idx)
+        eval1 = self.one_epoch("Valid", total_idx=total_idx, batch_size=8)
         self.valid_stats.append([eval1])
         self.best_valid_eval1 = max(self.best_valid_eval1, np.mean(eval1[0]))
 
     def one_epoch_test(self, total_idx=None):
-        eval1 = self.one_epoch("Test", total_idx=total_idx)
+        eval1 = self.one_epoch("Test", total_idx=total_idx, batch_size=8)
         # self.test_stats.append(eval1)
         return eval1
 

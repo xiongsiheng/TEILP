@@ -76,7 +76,7 @@ class TEKG_int_acc_ver(TEKG_params):
                                          mode=mode, rm_ls=self.data['rm_ls'],
                                          flag_output_probs_with_ref_edges=True,
                                          flag_acceleration=self.option.flag_acceleration,
-                                         flag_time_shift=self.option.shift, show_tqdm=False)
+                                         flag_time_shift=self.option.shift, show_tqdm=False, probs_normalization=False)
             prob_dict, target_interval = output[-1], output[-2] # only test mode needs targ_interval
 
         return prob_dict, target_interval
@@ -98,38 +98,85 @@ class TEKG_int_acc_ver(TEKG_params):
         return query_edges, query_intervals
 
 
-    def _populate_refNode_structures(self, data_idx, refNode_probs, refNode_rule_idx, random_walk_res, mode='Train'):
+    def _create_rule_used_ls(self, walk_res, query_rel, mode, max_rule_num=10):
         '''
-        Populates refNode_probs and refNode_rule_idx based on random_walk_res
+        For each sample, we choose a fixed number of rules to use according to their scores.
         '''
-        flag_valid = False
-        # Assuming some logic here that updates flag_valid to True if valid data is found
-        for idx_event in [0,1]:
-            if mode == 'Train':
-                idx_event = str(idx_event)
-            for edge in random_walk_res[data_idx][idx_event]:
-                if edge not in refNode_probs:
-                    refNode_probs[edge] = {0: {0: {0:[], 1:[]}, 1: {0:[], 1:[]}}, 1: {0: {0:[], 1:[]}, 1: {0:[], 1:[]}}}  # [idx_event][idx_query_time][idx_ref_time]
-                    refNode_rule_idx[edge] = []
+        if mode == 'Train':
+            return None, None
 
+        rule_used_ls = []
+        for idx_event_pos in [0,1]:
+            for edge in walk_res[idx_event_pos]:
                 for idx_query_time in [0,1]:
                     for idx_ref_time in [0,1]:
-                        pos = idx_query_time*2 + idx_ref_time
-                        if mode == 'Train':
-                            pos = str(pos)
-                        probs = random_walk_res[data_idx][idx_event][edge][pos]
+                        idx_complete = idx_query_time*2 + idx_ref_time
+                        probs = walk_res[idx_event_pos][edge][idx_complete]
+                        for prob_dict in probs:
+                            if prob_dict[1] not in rule_used_ls:
+                                rule_used_ls.append(prob_dict[1])
 
-                        if len(probs) > 0:
-                            flag_valid = True
-
-                        for prob in probs:
-                            refNode_probs[edge][int(idx_event)][idx_query_time][idx_ref_time].append(prob[0])
-                            refNode_rule_idx[edge].append(prob[1])
         
-        return flag_valid
+        # read rule score and sort the rules
+        path_suffix = '_' if not self.option.shift else '_time_shifting_'
+        cur_path = '../output/' + self.option.dataset + path_suffix[:-1] + '/' + self.option.dataset + path_suffix
+        cur_path += 'rule_scores_rel_' + str(query_rel) + '.json'
+        rule_score = None
+        if os.path.exists(cur_path):
+            with open(cur_path) as file:
+                rule_score = json.load(file)
+
+            # select the top k rules
+            rule_used_ls = sorted(rule_used_ls, key=lambda x: rule_score[x], reverse=True)
+            rule_used_ls = rule_used_ls[:max_rule_num]
+
+            # normalize the rule scores
+            rule_score = [0 if idx not in rule_used_ls else score for idx, score in enumerate(rule_score)]
+            rule_score = [score/sum(rule_score) for score in rule_score]
+        
+        return rule_used_ls, rule_score
 
 
-    def _update_output_structures(self, refNode_probs, refNode_rule_idx, probabilities, query_relations, i, valid_sample_idxs, refNode_sources, valid_query_relations, rule_idx, mode):
+    def _populate_refNode_structures(self, walk_res, mode, rule_used_ls=None, rule_score=None):
+        '''
+        For each sample, populates refNode_probs and refNode_rule_idx based on random_walk_res
+        '''
+        flag_valid = False
+        refNode_probs, refNode_rule_idx, preds = {}, {}, {}
+        for idx_event_pos in [0,1]:
+            # change the format
+            idx_event_pos = str(idx_event_pos) if mode == 'Train' else idx_event_pos
+            for edge in walk_res[idx_event_pos]:
+                if eval(edge)[2] == 9999 or eval(edge)[3] == 9999:
+                    # we don't need unknown time events as reference events
+                    continue
+                if edge not in refNode_probs:
+                    refNode_probs[edge] = {0: {0: {0:[], 1:[]}, 1: {0:[], 1:[]}}, 1: {0: {0:[], 1:[]}, 1: {0:[], 1:[]}}}  # [idx_event_pos][idx_query_time][idx_ref_time]
+                    refNode_rule_idx[edge] = []
+                    preds[edge] = {0: {0: {0: 0, 1: 0}, 1: {0: 0, 1: 0}}, 1: {0: {0: 0, 1: 0}, 1: {0: 0, 1: 0}}}
+
+                # for each event, we have a list of probabilities
+                for idx_query_time in [0,1]:
+                    for idx_ref_time in [0,1]:
+                        idx_complete = idx_query_time*2 + idx_ref_time
+                        idx_complete = str(idx_complete) if mode == 'Train' else idx_complete
+                        probs = walk_res[idx_event_pos][edge][idx_complete]
+
+                        # Given the query, the event pos and the reference event, more than one rules are satisfied.
+                        for prob_dict in probs:
+                            if (rule_used_ls is not None) and (prob_dict[1] not in rule_used_ls):
+                                continue
+
+                            refNode_probs[edge][int(idx_event_pos)][idx_query_time][idx_ref_time].append(prob_dict[0])
+                            refNode_rule_idx[edge].append(prob_dict[1])
+                            if rule_score is not None:
+                                preds[edge][int(idx_event_pos)][idx_query_time][idx_ref_time] += rule_score[prob_dict[1]] * prob_dict[0]
+                            flag_valid = True
+        
+        return flag_valid, refNode_probs, refNode_rule_idx, preds
+
+
+    def _update_output_structures(self, refNode_probs, refNode_rule_idx, probabilities, query_relations, idx, valid_sample_idxs, refNode_sources, valid_query_relations, rule_idx, mode):
         '''
         Updates the output structures with processed data from refNode_probs and refNode_rule_idx
         '''
@@ -172,24 +219,36 @@ class TEKG_int_acc_ver(TEKG_params):
 
 
         if num_valid_edge > 0:
-            valid_sample_idxs.append(i)
+            valid_sample_idxs.append(idx)
             refNode_sources.append(num_valid_edge)
-            valid_query_relations += [query_relations[i]] * num_valid_edge
+            valid_query_relations += [query_relations[idx]] * num_valid_edge
 
 
-
-    def _process_edges(self, idx_ls, random_walk_res, mode, query_relations):
+    def _process_graph(self, idx_ls, random_walk_res, mode, query_relations):
         valid_sample_idxs, valid_query_relations, refNode_sources, valid_rule_idx, probabilities = [], [], [], [], [[], [], [], [], [], [], [], []]
-        for i, data_idx in enumerate(idx_ls):
-            if data_idx not in random_walk_res:
+        for idx, query_idx in enumerate(idx_ls):
+            if query_idx not in random_walk_res:
                 continue
+            
+            walk_res = random_walk_res[query_idx]
+            rule_used_ls, rule_score = self._create_rule_used_ls(walk_res, query_relations[idx], mode)
 
-            refNode_probs, refNode_rule_idx = {}, {}
-            flag_valid = self._populate_refNode_structures(data_idx, refNode_probs, refNode_rule_idx, random_walk_res, mode)
+            flag_valid, refNode_probs, refNode_rule_idx, preds = self._populate_refNode_structures(walk_res, mode, rule_used_ls, rule_score)
+            # print(refNode_probs.keys())
+            # for event in refNode_probs:
+            #     print(event)
+            #     print(preds[event])
+            #     print(refNode_rule_idx[event])
+            #     print()
+            # sys.exit()
 
-            if flag_valid:
-                self._update_output_structures(refNode_probs, refNode_rule_idx, probabilities, query_relations, i, valid_sample_idxs, refNode_sources, valid_query_relations, valid_rule_idx, mode)
+            if not flag_valid:
+                continue
+            
+            self._update_output_structures(refNode_probs, refNode_rule_idx, probabilities, query_relations, idx, valid_sample_idxs, refNode_sources, valid_query_relations, valid_rule_idx, mode)
 
+        # print(len(probabilities[0]))
+        # sys.exit()
 
         # Finalizes the structure of refNode_sources based on rule_idx
         refNode_num = 0
@@ -220,17 +279,10 @@ class TEKG_int_acc_ver(TEKG_params):
                 if data_idx in input_intervals_dict:
                     query_intervals[i] = input_intervals_dict[data_idx].tolist()
 
-        valid_sample_idxs, valid_query_relations, refNode_sources, valid_rule_idx, probabilities = self._process_edges(idx_ls, random_walk_res, mode, query_relations)
+        valid_sample_idxs, valid_query_relations, refNode_sources, valid_rule_idx, probabilities = self._process_graph(idx_ls, random_walk_res, mode, query_relations)
 
         return query_relations, valid_query_relations, refNode_sources, valid_rule_idx, probabilities, valid_sample_idxs, query_intervals, [], []
 
-
-  
-
-        
-
-
-  
 
 
 

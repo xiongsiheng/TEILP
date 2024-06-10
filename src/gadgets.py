@@ -6,13 +6,14 @@ from tqdm import tqdm
 import copy
 import random
 import sys
+from collections import Counter
 from utlis import *
 
 
 
 
 class Data_preprocessor():
-    def prepare_data(self, option, save_option=True):
+    def prepare_data(self, option, save_option=True, process_walk_res=True):
         data = {}
         dataset_index = ['wiki', 'YAGO', 'icews14', 'icews05-15', 'gdelt100'].index(option.dataset)
 
@@ -62,31 +63,28 @@ class Data_preprocessor():
             data['valid_idx_ls'] = [idx + np.sum(data['num_samples_dist']) for idx in data['valid_idx_ls']]
             data['test_idx_ls'] = [idx + np.sum(data['num_samples_dist']) for idx in data['test_idx_ls']]
 
-
+        # relations w/o duration
         data['rel_ls_no_dur'] = [[4, 16, 17, 20], [0, 7], None, None, None][dataset_index]
 
-        # Todo: time shift mode
+
         with open('../data/'+ data['dataset_name'] +'_time_pred_eval_rm_idx.json', 'r') as file:
             data['rm_ls'] = json.load(file)
         if option.shift:
             with open('../data/'+ data['dataset_name'] +'_time_pred_eval_rm_idx_shift_mode.json', 'r') as file:
                 data['rm_ls'] = json.load(file)
 
-        # if option.flag_acceleration:
-        #     data['mdb'], data['connectivity'], data['TEKG_nodes'] = None, None, None
-        # else:
-        #     data['mdb'], data['connectivity'], data['TEKG_nodes'], data['num_entity'] = self.prepare_whole_TEKG_graph(data)
+        # remove test samples with unknown time      
+        data['test_idx_ls'] = [idx for idx in data['test_idx_ls'] if (idx - data['num_samples_dist'][0] - data['num_samples_dist'][1]) not in data['rm_ls']]
 
         # We do not create the whole graph which is time-consuming.
         data['mdb'], data['connectivity'], data['TEKG_nodes'] = None, None, None
 
+        # Todo: use the duration information for learning
+        if option.flag_use_dur:
+            with open("../output/"+ data['dataset_name'] + "_dur_preds.json", "r") as json_file:
+                data['pred_dur'] = json.load(json_file)
 
         if save_option:
-            # Todo
-            if option.flag_use_dur:
-                with open("../output/"+ data['dataset_name'] + "_dur_preds.json", "r") as json_file:
-                    data['pred_dur'] = json.load(json_file)
-
             option.this_expsdir = os.path.join(option.exps_dir, data['dataset_name'] + '_' + option.tag)
             if not os.path.exists(option.this_expsdir):
                 os.makedirs(option.this_expsdir)
@@ -96,7 +94,7 @@ class Data_preprocessor():
             option.model_path = os.path.join(option.ckpt_dir, "model")
 
             option.num_step = [4, 6, 4, 4, 4][dataset_index]
-            option.num_rule = [1000, 6000, 10000, 10000, 10000][dataset_index]
+            option.num_rule = [1000, 1000, 1000, 1000, 1000][dataset_index]  # for each relation
             option.flag_interval = True if dataset_index in [0, 1] else False
 
             option.savetxt = option.this_expsdir + '/intermediate_res.txt'
@@ -104,10 +102,11 @@ class Data_preprocessor():
             print("Option saved.")
 
 
-            data['random_walk_res'] = None
+        data['random_walk_res'] = None
+        if process_walk_res:
             if dataset_index in [0, 1] and option.train:
-                # This could be time-consuming. We recommend to save the results without rewriting.
-                self.prepare_graph_random_walk_res(option, data, 'Train', num_workers=20, show_tqdm=True, rewriting=False)
+                # Once this step is done, we recommend to save the results without rewriting unless the settings are changed.
+                self.prepare_graph_random_walk_res(option, data, 'Train', num_workers=20, show_tqdm=True, rewriting=True)
             print("Data prepared.")
 
         return data
@@ -273,7 +272,7 @@ class Data_preprocessor():
 
 
     def process_random_walk_results_dist_ver(self, dataset, mode, num_rel, file_paths, num_workers=10):
-        index_pieces = split_list_into_pieces(range(num_rel), num_workers)
+        index_pieces = split_list_into_batches(range(num_rel), num_batches=num_workers)
 
         data = {}
         for file_path in file_paths:
@@ -285,7 +284,7 @@ class Data_preprocessor():
         return
 
 
-    def calculate_time_prob_dist(self, edge, timestamp_range, targ_interval, stat_ls, idx_ls, mode, flag_time_shift=False):
+    def calculate_time_prob_dist(self, edge, timestamp_range, targ_interval, stat_ls, idx_ls, mode, flag_time_shift=False, probs_normalization=True):
         idx_ts_or_te, idx_first_or_last_event, idx_ref_time_ts_or_te = idx_ls
         idx_prob_ls = 4*idx_ts_or_te + 2*idx_first_or_last_event + idx_ref_time_ts_or_te
 
@@ -308,8 +307,10 @@ class Data_preprocessor():
         if len(cur_probs[np.isnan(cur_probs)])>0 or len(cur_probs[np.isinf(cur_probs)])>0 or sum(cur_probs) == 0:
             return False, []
 
+        # if probs_normalization:
+        #     cur_probs /= gaussian_pdf(Gau_mean, Gau_mean, Gau_std)
+
         cur_probs /= np.sum(cur_probs)
-        cur_probs /= np.max(cur_probs)
         cur_probs = np.around(cur_probs, decimals=6)
 
         if mode == 'Train':
@@ -319,16 +320,42 @@ class Data_preprocessor():
         return True, cur_probs
 
 
+    def _calculate_distribution(self, data):
+        '''
+        Given a rule, count the distribution of the first and last events.
+        '''
+        first_position_counter = Counter()
+        second_position_counter = Counter()
+
+        for event_ls in data:
+            first_event, last_event = tuple(event_ls[0]), tuple(event_ls[1])
+            # remove unknown time events
+            if first_event[2] != 9999 and first_event[3] != 9999:  # (s, r, ts, te, o)
+                first_position_counter[first_event] += 1
+    
+            if last_event[2] != 9999 and last_event[3] != 9999:    
+                second_position_counter[last_event] += 1
+        
+        total_first = sum(first_position_counter.values())
+        total_second = sum(second_position_counter.values())
+        
+        first_position_distribution = {k: v*1. / total_first for k, v in first_position_counter.items()}
+        second_position_distribution = {k: v*1. / total_second for k, v in second_position_counter.items()}
+
+        return [first_position_distribution, second_position_distribution]
+
+
 
     def prepare_inputs_interval_ver(self, path, dataset, edges, idx_ls, targ_rel, num_samples_dist, pattern_ls, timestamp_range, num_rel, 
                                     ts_stat_ls, te_stat_ls, mode=None, rm_ls=None, with_ref_end_time=True, 
                                     only_find_samples_with_empty_rules=False, flag_output_probs_with_ref_edges=False,
                                     flag_acceleration=False, flag_time_shift=False, write_to_file=False, show_tqdm=False,
-                                    flag_rule_split=False, rewriting=False):            
+                                    flag_rule_split=False, rewriting=False, probs_normalization=True):            
         
         input_intervals, probs = {}, {}
         sample_with_empty_rules_ls = []
 
+        dim = 1 if mode == 'Train' else len(timestamp_range)
         if show_tqdm:
             idx_ls = tqdm(idx_ls, desc='Prepare input probs')
         for data_idx in idx_ls:
@@ -379,7 +406,6 @@ class Data_preprocessor():
             if only_find_samples_with_empty_rules or not flag_output_probs_with_ref_edges:
                 continue
 
-
             probs[data_idx] = {0:{}, 1:{}}  # [first event, last event]
             for p in cur_valid_rules:
                 # for each rule, calculate the probability of the time gap
@@ -387,31 +413,39 @@ class Data_preprocessor():
                 ruleLen = len(p.split(' '))//2
                 cur_stat_ls = ts_stat_ls[cur_rel][p_idx] + te_stat_ls[cur_rel][p_idx]
 
+                events_for_cur_rule = []
                 for walk in cur_output[cur_rel][p]['edge_ls']:
-                    edge_ref = [walk[idx] for idx in [0, -1]]  # we only consider the first and last event
-                    for idx_first_or_last_event in [0, 1]:
-                        edge = edge_ref[idx_first_or_last_event]
-                  
-                        if str_tuple(edge) not in probs[data_idx][idx_first_or_last_event]:
-                            probs[data_idx][idx_first_or_last_event][str_tuple(edge)] = {i: [] for i in range(4)} if not flag_rule_split \
+                    events_for_cur_rule.append([walk[idx] for idx in [0, -1]])  # we only consider the first and last event
+                
+                events_for_cur_rule = self._calculate_distribution(events_for_cur_rule)
+
+                for idx_event_pos in [0, 1]:
+                    for edge in events_for_cur_rule[idx_event_pos]:
+                        alpha_edge = events_for_cur_rule[idx_event_pos][edge]            
+                        if str_tuple(edge) not in probs[data_idx][idx_event_pos]:
+                            probs[data_idx][idx_event_pos][str_tuple(edge)] = {i: [] for i in range(4)} if not flag_rule_split \
                                                                     else {i: {rLen: [] for rLen in range(1, 6)} for i in range(4)}
 
                         for idx_ts_or_te in [0, 1]:
                             for idx_ref_time_ts_or_te in [0, 1]:                                
                                 flag_success, cur_probs = self.calculate_time_prob_dist(edge, timestamp_range, cur_interval, cur_stat_ls, 
-                                                                    [idx_ts_or_te, idx_first_or_last_event, idx_ref_time_ts_or_te], mode, flag_time_shift)
-                                if not flag_success and mode == 'Train':
-                                    continue
-                                if not flag_success and mode == 'Test':
-                                    cur_probs = np.array([1./len(timestamp_range)] * len(timestamp_range))
+                                                                    [idx_ts_or_te, idx_event_pos, idx_ref_time_ts_or_te], 
+                                                                    mode, flag_time_shift, probs_normalization)
+                                if not flag_success:
+                                    cur_probs = np.array([1./len(timestamp_range)] * dim)
+                                    if mode == 'Train':
+                                        cur_probs = cur_probs[0]
+                                
+                                cur_probs = (cur_probs*alpha_edge).tolist()
 
                                 if flag_acceleration:
                                     cur_probs = [cur_probs, p_idx]
+
                                 if flag_rule_split:
-                                    probs[data_idx][idx_first_or_last_event][str_tuple(edge)][2*idx_ts_or_te + idx_ref_time_ts_or_te][ruleLen].append(cur_probs)                                    
+                                    probs[data_idx][idx_event_pos][str_tuple(edge)][2*idx_ts_or_te + idx_ref_time_ts_or_te][ruleLen].append(cur_probs)                                    
                                 else:
-                                    probs[data_idx][idx_first_or_last_event][str_tuple(edge)][2*idx_ts_or_te + idx_ref_time_ts_or_te].append(cur_probs)
-                # Loop end for one rule pattern
+                                    probs[data_idx][idx_event_pos][str_tuple(edge)][2*idx_ts_or_te + idx_ref_time_ts_or_te].append(cur_probs)
+            # Loop end for one rule pattern
 
             if len(cur_valid_rules) == 0:
                 continue
@@ -425,7 +459,7 @@ class Data_preprocessor():
                 with open('../output/process_res/' + filename, 'w') as f:
                     json.dump(output, f)
 
-            # Loop end for one sample
+        # Loop end for one sample
 
         output_ls = [input_intervals]
         if flag_output_probs_with_ref_edges:
@@ -626,7 +660,7 @@ class Data_preprocessor():
         dataset = data['dataset_name']
         if dataset in ['wiki', 'YAGO']:
             idx_ls = data['train_idx_ls'] if mode == 'Train' else data['test_idx_ls']
-            idx_pieces = split_list_into_pieces(idx_ls, num_workers)
+            idx_pieces = split_list_into_batches(idx_ls, num_batches=num_workers)
             outputs = Parallel(n_jobs=num_workers)(delayed(self.create_TEKG_in_batch)(option, data, one_piece, mode, show_tqdm, rewriting) for one_piece in idx_pieces)
 
             output_probs_with_ref_edges = {}
@@ -676,7 +710,7 @@ class Data_preprocessor():
 
 
             rel_ls = list(range(num_rel//2))
-            idx_pieces = split_list_into_pieces(rel_ls, num_workers)
+            idx_pieces = split_list_into_batches(rel_ls, num_batches=num_workers)
             Parallel(n_jobs=num_workers)(delayed(self.prepare_inputs_timestamp_ver)\
                                                 (samples, one_piece, pattern_ls, timestamp_range, 
                                                     num_rel//2, stat_res, mode=mode,
@@ -897,7 +931,7 @@ class Rule_summarizer(Data_preprocessor):
             return
         
         num_processes = min(num_processes, len(targ_rel_ls))
-        rel_batch_ls = split_list_into_pieces(targ_rel_ls, num_processes)
+        rel_batch_ls = split_list_into_batches(targ_rel_ls, num_batches=num_processes)
 
         Parallel(n_jobs=num_processes)(
             delayed(self.process_TEILP_results_in_batch)(path, file_ls, with_ref_end_time, flag_capture_dur_only, rel_batch, known_edges, stat_res_path) for rel_batch in rel_batch_ls

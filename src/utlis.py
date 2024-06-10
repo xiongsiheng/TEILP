@@ -127,22 +127,23 @@ def merge_list(ls_ls):
 
 
 
-def split_list_into_batches(lst, batch_size):
+def split_list_into_batches(lst, batch_size=None, num_batches=None):
     """
-    Splits a list into batches of a given size.
+    Splits a list into batches (either of a given batch size or of a given number of batches).
     """
+    assert (batch_size is not None) or (num_batches is not None), "Either batch_size or num_pieces must be provided."
+    if num_batches is not None:
+        indices_per_piece = len(lst) // num_batches
+        index_pieces = [lst[i:i + indices_per_piece] for i in range(0, len(lst), indices_per_piece)]
+        if len(index_pieces)>num_batches:
+            output = index_pieces[:num_batches-1] + [merge_list(index_pieces[num_batches-1:])]
+        else:
+            output = index_pieces
+        return output
+    
     return [lst[i:i + batch_size] for i in range(0, len(lst), batch_size)]
 
 
-
-def split_list_into_pieces(all_indices, num_pieces):
-    indices_per_piece = len(all_indices) // num_pieces
-    index_pieces = [all_indices[i:i + indices_per_piece] for i in range(0, len(all_indices), indices_per_piece)]
-    if len(index_pieces)>num_pieces:
-        output = index_pieces[:num_pieces-1] + [merge_list(index_pieces[num_pieces-1:])]
-    else:
-        output = index_pieces
-    return output
 
 
 

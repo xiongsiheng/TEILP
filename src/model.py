@@ -32,7 +32,7 @@ class Learner(object):
         self.flag_ruleLen_split = option.flag_ruleLen_split_ver
         self.flag_state_vec_enhan = option.flag_state_vec_enhancement
         self.flag_acceleration = option.flag_acceleration
-
+        self.flag_loss_scaling_factor = 0.05
 
         np.random.seed(self.seed)
 
@@ -370,6 +370,14 @@ class Learner(object):
                 # refNode_attn * probs_from_refNode: shape: (dummy_batch_size, num_timestamp)
                 self.pred.append(tf.matmul(self.refNode_source, refNode_attn * probs_from_refNode) / tf.matmul(self.refNode_source, refNode_attn))
 
+
+        # scaling the loss to make the learning more stable.
+        if self.flag_loss_scaling_factor is not None:
+            self.pred[0] /= self.flag_loss_scaling_factor
+            if self.flag_int:
+                self.pred[1] /= self.flag_loss_scaling_factor
+
+
         self.final_loss = -tf.reduce_sum(tf.log(tf.maximum(self.pred[0], self.thr)), 1)
         self.final_loss += -tf.reduce_sum(tf.log(tf.maximum(self.pred[1], self.thr)), 1) if self.flag_int else 0
 
@@ -487,9 +495,11 @@ class Learner(object):
         qq = list(range(self.num_query))
         refNode_source = [[0] * (self.num_query)]
         res_random_walk = np.array([[0] * 2] * (self.num_query))
+        
         probs = [[[0]]*self.num_timestamp] * 4
-        if self.flag_interval:
+        if self.flag_int:
             probs += [[[0]]*self.num_timestamp] * 4
+        probs = np.array(probs).transpose(1, 0, 2)
 
         fetched = self._run_graph_acc(sess, qq, refNode_source, res_random_walk, probs, to_fetch)
 
