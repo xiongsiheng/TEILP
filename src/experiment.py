@@ -43,23 +43,25 @@ class Experiment():
             # Shape: qq: [] * dummy_batch_size (num_events);  refNode_source: [(dummy_batch_size,)] * batch_size;
             #        res_random_walk: (num_rules_in_total_for_different_events, 2); [event_idx, rule_idx]
             #        probs: [[(num_timestamp, )] * dummy_batch_size ] * 8
-            qq, query_rels, refNode_source, res_random_walk, probs, valid_sample_idx, input_intervals, input_samples, _ = myTEKG.graph.create_graph(batch_idx_ls, mode)
+            qq, query_rels, refNode_source, res_random_walk, probs, valid_sample_idx, input_intervals, input_samples, _, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode)
         else:
             qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, valid_ref_event_idx, input_intervals, input_samples = myTEKG.graph.create_graph(batch_idx_ls, mode)
         
-        # print(refNode_source[0].shape)
 
         if len(valid_sample_idx) == 0:
             return [], [], []
 
-        probs = np.array(probs).transpose(1, 0, 2)
-        
-        if self.option.flag_acceleration:
-            inputs = [query_rels, refNode_source, res_random_walk, probs]
-        else:
-            inputs = [qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, valid_ref_event_idx]
+        if mode == "Train":
+            probs = np.array(probs).transpose(1, 0, 2)
+            
+            if self.option.flag_acceleration:
+                inputs = [query_rels, refNode_source, res_random_walk, probs]
+            else:
+                inputs = [qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, valid_ref_event_idx]
 
-        output = run_fn(self.sess, inputs)
+            output = run_fn(self.sess, inputs)
+        else:
+            output = final_preds  # [(bacth_size, num_timestamp)] * (1 + int(flag_int))
 
         preds, gts = [], []
         if mode == "Test":
@@ -73,6 +75,12 @@ class Experiment():
             preds = self._adjust_preds_based_on_dur(preds, batch_idx_ls, valid_sample_idx, pred_dur_dict, qq)
             
             gts = np.array(input_intervals)[valid_sample_idx]
+
+        # print('preds:')
+        # print(preds)
+        # print('gts:')
+        # print(gts)
+        # print('---------------------------------')
 
         return output, preds, gts
 
@@ -201,6 +209,7 @@ class Experiment():
             else:
                 return True
 
+
     def train(self, total_idx=None):
         while (self.epoch < self.option.max_epoch and not self.early_stopped):
             self.one_epoch_train(total_idx=total_idx)
@@ -222,9 +231,11 @@ class Experiment():
 
 
     def get_rule_scores(self):
+        # Toodo: normal version
         if self.option.flag_acceleration:
-            rule_scores = self.learner.get_rule_scores_acc(self.sess)
-            return rule_scores
+            rule_scores, refType_scores = self.learner.get_rule_scores_acc(self.sess)
+            return rule_scores, refType_scores
+
 
     def close_log_file(self):
         self.log_file.close()

@@ -89,9 +89,8 @@ train_edges, valid_data, valid_data_inv, test_data, test_data_inv = obtain_datas
 
 
 
-def prepare_train_edges():
-    # mask valid/test data
-    # we use 9999 as unknown value notation (normal (year) values are like 1800, 1923, 2017, etc.)
+def prepare_train_edges(train_edges, valid_data, valid_data_inv, test_data, test_data_inv):
+    # mask valid/test data, we use 9999 as unknown value notation (normal (year) values are like 1800, 1923, 2017, etc.)
     if not flag_time_shift:
         process_data = lambda x: np.hstack((x[:, :3], np.full_like(x[:, 3:], 9999)))
         valid_data = process_data(valid_data)
@@ -99,16 +98,14 @@ def prepare_train_edges():
         test_data = process_data(test_data)
         test_data_inv = process_data(test_data_inv)
 
-
     num_train, num_valid, num_test = len(train_edges)//2, len(valid_data), len(test_data)
-
 
     edges = np.vstack([train_edges[:len(train_edges)//2], valid_data, test_data,
                     train_edges[len(train_edges)//2:], valid_data_inv, test_data_inv])
     return edges, num_train, num_valid, num_test
 
 
-edges, num_train, num_valid, num_test = prepare_train_edges()
+edges, num_train, num_valid, num_test = prepare_train_edges(train_edges, valid_data, valid_data_inv, test_data, test_data_inv)
 
 
 def prepare_pos_examples_idx():
@@ -168,4 +165,4 @@ summarizer = Rule_summarizer()
 summarizer.convert_walks_into_rules(dataset=dataset_using, path='../output/' + output_path, idx_ls=pos_examples_idx, 
                         flag_time_shift=flag_time_shift, flag_biased=flag_biased, flag_few_training=flag_few_training,
                         ratio=ratio, imbalanced_rel=imbalanced_rel, exp_idx=exp_idx, 
-                        targ_rel_ls=targ_rel_ls, num_processes=20, stat_res_path=stat_res_path)
+                        targ_rel_ls=targ_rel_ls, num_processes=1, stat_res_path=stat_res_path)

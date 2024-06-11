@@ -98,12 +98,12 @@ class TEKG_int_acc_ver(TEKG_params):
         return query_edges, query_intervals
 
 
-    def _create_rule_used_ls(self, walk_res, query_rel, mode, max_rule_num=10):
+    def _create_rule_used_ls(self, walk_res, query_rel, mode, max_rule_num=100):
         '''
         For each sample, we choose a fixed number of rules to use according to their scores.
         '''
         if mode == 'Train':
-            return None, None
+            return None, None, None
 
         rule_used_ls = []
         for idx_event_pos in [0,1]:
@@ -121,23 +121,26 @@ class TEKG_int_acc_ver(TEKG_params):
         path_suffix = '_' if not self.option.shift else '_time_shifting_'
         cur_path = '../output/' + self.option.dataset + path_suffix[:-1] + '/' + self.option.dataset + path_suffix
         cur_path += 'rule_scores_rel_' + str(query_rel) + '.json'
-        rule_score = None
+        rule_scores, refType_scores = None, None
         if os.path.exists(cur_path):
             with open(cur_path) as file:
-                rule_score = json.load(file)
+                data = json.load(file)
+
+            rule_scores = data['rule_scores']
+            refType_scores = data["refType_scores"]
 
             # select the top k rules
-            rule_used_ls = sorted(rule_used_ls, key=lambda x: rule_score[x], reverse=True)
+            rule_used_ls = sorted(rule_used_ls, key=lambda x: rule_scores[x], reverse=True)
             rule_used_ls = rule_used_ls[:max_rule_num]
-
+            
             # normalize the rule scores
-            rule_score = [0 if idx not in rule_used_ls else score for idx, score in enumerate(rule_score)]
-            rule_score = [score/sum(rule_score) for score in rule_score]
+            rule_scores = [0 if idx not in rule_used_ls else score for idx, score in enumerate(rule_scores)]
+            rule_scores = [score/(sum(rule_scores) + 1e-20) for score in rule_scores]
         
-        return rule_used_ls, rule_score
+        return rule_used_ls, rule_scores, refType_scores
 
 
-    def _populate_refNode_structures(self, walk_res, mode, rule_used_ls=None, rule_score=None):
+    def _populate_refNode_structures(self, walk_res, mode, rule_used_ls=None, rule_scores=None, refType_scores=None):
         '''
         For each sample, populates refNode_probs and refNode_rule_idx based on random_walk_res
         '''
@@ -153,7 +156,8 @@ class TEKG_int_acc_ver(TEKG_params):
                 if edge not in refNode_probs:
                     refNode_probs[edge] = {0: {0: {0:[], 1:[]}, 1: {0:[], 1:[]}}, 1: {0: {0:[], 1:[]}, 1: {0:[], 1:[]}}}  # [idx_event_pos][idx_query_time][idx_ref_time]
                     refNode_rule_idx[edge] = []
-                    preds[edge] = {0: {0: {0: 0, 1: 0}, 1: {0: 0, 1: 0}}, 1: {0: {0: 0, 1: 0}, 1: {0: 0, 1: 0}}}
+                    if mode == 'Test':
+                        preds[edge] = {0: 0, 1: 0}  # query ts or te
 
                 # for each event, we have a list of probabilities
                 for idx_query_time in [0,1]:
@@ -167,16 +171,23 @@ class TEKG_int_acc_ver(TEKG_params):
                             if (rule_used_ls is not None) and (prob_dict[1] not in rule_used_ls):
                                 continue
 
-                            refNode_probs[edge][int(idx_event_pos)][idx_query_time][idx_ref_time].append(prob_dict[0])
+                            # refNode_probs[edge][int(idx_event_pos)][idx_query_time][idx_ref_time].append(prob_dict[0])
+                            refNode_probs[edge][int(idx_event_pos)][idx_query_time][idx_ref_time].append(prob_dict)
                             refNode_rule_idx[edge].append(prob_dict[1])
-                            if rule_score is not None:
-                                preds[edge][int(idx_event_pos)][idx_query_time][idx_ref_time] += rule_score[prob_dict[1]] * prob_dict[0]
+                            
+                            if mode == 'Test' and (rule_scores is not None) and (refType_scores is not None):
+                                # refType_scores: [(first_event_ts, first_event_te), (last_event_ts, last_event_te), (first_event, last_event)]
+                                prob_event_pos = refType_scores[3*idx_query_time + 2][idx_event_pos]
+                                prob_ref_time = refType_scores[3*idx_query_time + idx_event_pos][idx_ref_time]
+                                preds[edge][idx_query_time] += prob_event_pos * prob_ref_time * rule_scores[prob_dict[1]] * np.array(prob_dict[0])
+                            
                             flag_valid = True
         
         return flag_valid, refNode_probs, refNode_rule_idx, preds
 
 
-    def _update_output_structures(self, refNode_probs, refNode_rule_idx, probabilities, query_relations, idx, valid_sample_idxs, refNode_sources, valid_query_relations, rule_idx, mode):
+    def _update_outputs(self, refNode_probs, refNode_rule_idx, probabilities, query_relations, idx, valid_sample_idxs, 
+                                  refNode_sources, valid_query_relations, rule_idx, mode, preds):
         '''
         Updates the output structures with processed data from refNode_probs and refNode_rule_idx
         '''
@@ -184,38 +195,64 @@ class TEKG_int_acc_ver(TEKG_params):
         if self.option.flag_ruleLen_split_ver:
             print('Todo')
             pass
+        
+        if mode == 'Test' and len(preds) > 0:
+            # Given the sample, merge probs from different events.
+            final_preds = {0: 0, 1: 0}
+            for edge in preds:
+                for idx_query_time in [0,1]:
+                    final_preds[idx_query_time] += preds[edge][idx_query_time]
+            
+            valid_sample_idxs.append(idx)
+            
+            return final_preds
+ 
 
         dim = len(self.data['timestamp_range']) if mode == 'Test' else 1
 
         num_valid_edge = 0
         for edge in refNode_rule_idx:
+            # refNode_rule_idx[edge]: num of different rules satisfied for the current edge (idx_event_pos can be 0 or 1)
             if len(refNode_rule_idx[edge]) == 0:
                 continue
 
             num_valid_edge += 1
-            rule_idx.append([[len(rule_idx), idx_rule] for idx_rule in refNode_rule_idx[edge]])
-            # print(refNode_probs[edge])
+            # rule_idx.append([[len(rule_idx), idx_rule] for idx_rule in refNode_rule_idx[edge]])
 
-            x = []
-            for idx_first_or_last in [0, 1]:
-                for idx_query_ts_or_te in [0, 1]:
-                    for idx_ref_ts_or_te in [0, 1]:
-                        cur_refNode_probs_ls = refNode_probs[edge][idx_first_or_last][idx_query_ts_or_te][idx_ref_ts_or_te]
+            rule_idx_with_probs = []
+            # probs_one_event = []
+            j = 0
+            for idx_query_time in [0, 1]:
+                for idx_event_pos in [0, 1]:
+                    for idx_ref_time in [0, 1]:
+                        probs = refNode_probs[edge][idx_event_pos][idx_query_time][idx_ref_time]
+                        rule_idx_with_probs.append([[len(rule_idx), prob_dict[1], prob_dict[0]] for prob_dict in probs])  # [idx_event_in_batch, idx_rule, prob]
+
                         if mode == 'Train':
-                            cur_refNode_probs_ls = [[prob] for prob in cur_refNode_probs_ls]
-                        cur_refNode_probs_ls += [1./len(self.data['timestamp_range']) * np.ones((dim,))] * (len(refNode_rule_idx[edge]) - len(cur_refNode_probs_ls))
+                            probs = [[prob_dict[0]] for prob_dict in probs]
+                        
+                        probs += [1./len(self.data['timestamp_range']) * np.ones((dim,))] * (len(refNode_rule_idx[edge]) - len(probs))
 
                         if mode == 'Train' and self.option.prob_type_for_training == 'max':
-                            x.append(np.max(cur_refNode_probs_ls, axis=0))
+                            # probs_one_event.append(np.max(probs, axis=0))
+                            probabilities[j].append(np.max(probs, axis=0))
                         else:
-                            x.append(np.mean(cur_refNode_probs_ls, axis=0))
+                            # probs_one_event.append(np.mean(probs, axis=0))
+                            probabilities[j].append(np.mean(probs, axis=0))
 
-            # Indices mapping: defines which element of x goes into which sublist of probabilities
-            indices_mapping = [0, 1, 4, 5, 2, 3, 6, 7]
+                        # probabilities[j].append(probs_one_event)
+                        j += 1
+
+
+            # Indices mapping: defines which element of probs_one_event goes into which sublist of probabilities
+            # indices_mapping = [0, 1, 4, 5, 2, 3, 6, 7]
 
             # Loop through the mapping to append items to the corresponding sublist
-            for j, index in enumerate(indices_mapping):
-                probabilities[j].append(x[index])
+            # for j, index in enumerate(indices_mapping):
+            #     probabilities[j].append(probs_one_event[index])
+            
+            # rule_idx_with_probs = [rule_idx_with_probs[index] for index in indices_mapping]
+            rule_idx.append(rule_idx_with_probs)  # [idx_event_in_batch, idx_rule, prob] * 4 * (1+flag_int)
 
 
         if num_valid_edge > 0:
@@ -223,50 +260,53 @@ class TEKG_int_acc_ver(TEKG_params):
             refNode_sources.append(num_valid_edge)
             valid_query_relations += [query_relations[idx]] * num_valid_edge
 
+        return None
+
 
     def _process_graph(self, idx_ls, random_walk_res, mode, query_relations):
         valid_sample_idxs, valid_query_relations, refNode_sources, valid_rule_idx, probabilities = [], [], [], [], [[], [], [], [], [], [], [], []]
+        merged_valid_rule_idx = []
+        final_preds = [[] for _ in range(1+ int(self.option.flag_interval))]
         for idx, query_idx in enumerate(idx_ls):
             if query_idx not in random_walk_res:
                 continue
             
             walk_res = random_walk_res[query_idx]
-            rule_used_ls, rule_score = self._create_rule_used_ls(walk_res, query_relations[idx], mode)
-
-            flag_valid, refNode_probs, refNode_rule_idx, preds = self._populate_refNode_structures(walk_res, mode, rule_used_ls, rule_score)
-            # print(refNode_probs.keys())
-            # for event in refNode_probs:
-            #     print(event)
-            #     print(preds[event])
-            #     print(refNode_rule_idx[event])
-            #     print()
-            # sys.exit()
+            rule_used_ls, rule_scores, refType_scores = self._create_rule_used_ls(walk_res, query_relations[idx], mode)
+            flag_valid, refNode_probs, refNode_rule_idx, preds = self._populate_refNode_structures(walk_res, mode, rule_used_ls, rule_scores, refType_scores)
 
             if not flag_valid:
                 continue
             
-            self._update_output_structures(refNode_probs, refNode_rule_idx, probabilities, query_relations, idx, valid_sample_idxs, refNode_sources, valid_query_relations, valid_rule_idx, mode)
+            preds = self._update_outputs(refNode_probs, refNode_rule_idx, probabilities, query_relations, idx, 
+                                         valid_sample_idxs, refNode_sources, valid_query_relations, valid_rule_idx, mode, preds)
+            if mode == 'Test':
+                for i in range(1+ int(self.option.flag_interval)):
+                    final_preds[i].append(preds[i])
+    
 
-        # print(len(probabilities[0]))
-        # sys.exit()
+        # For training, we create all matrixes; for test, we directly calculate the probs.
+        if mode == 'Train':    
+            # Finalizes the structure of refNode_sources based on rule_idx
+            # refNode_sources: edges from which sample
+            refNode_num = 0
+            for i in range(len(refNode_sources)): # len(refNode_sources): batch_size
+                sources = np.zeros((len(valid_rule_idx), ))
+                sources[refNode_num: refNode_num + refNode_sources[i]] = 1
+                
+                refNode_num += refNode_sources[i]
+                refNode_sources[i] = sources.copy()
 
-        # Finalizes the structure of refNode_sources based on rule_idx
-        refNode_num = 0
-        for i in range(len(refNode_sources)):
-            sources = np.zeros((len(valid_rule_idx), ))
-            sources[refNode_num: refNode_num + refNode_sources[i]] = 1
-            
-            refNode_num += refNode_sources[i]
-            refNode_sources[i] = sources.copy()
+            for j in range(len(probabilities)):
+                output = []
+                for i in range(len(valid_rule_idx)):
+                    output += valid_rule_idx[i][j]
+                merged_valid_rule_idx.append(np.array(output))
+        else:
+            for i in range(1+ int(self.option.flag_interval)):
+                final_preds[i] = np.vstack(final_preds[i])
 
-        output = []
-        for i in range(len(valid_rule_idx)):
-            output += valid_rule_idx[i]
-
-        valid_rule_idx = np.array(output)
-
-        return valid_sample_idxs, valid_query_relations, refNode_sources, valid_rule_idx, probabilities
-
+        return valid_sample_idxs, valid_query_relations, refNode_sources, merged_valid_rule_idx, probabilities, final_preds
 
 
     def create_graph(self, idx_ls, mode):
@@ -279,9 +319,9 @@ class TEKG_int_acc_ver(TEKG_params):
                 if data_idx in input_intervals_dict:
                     query_intervals[i] = input_intervals_dict[data_idx].tolist()
 
-        valid_sample_idxs, valid_query_relations, refNode_sources, valid_rule_idx, probabilities = self._process_graph(idx_ls, random_walk_res, mode, query_relations)
+        valid_sample_idxs, valid_query_relations, refNode_sources, merged_valid_rule_idx, probabilities, final_preds = self._process_graph(idx_ls, random_walk_res, mode, query_relations)
 
-        return query_relations, valid_query_relations, refNode_sources, valid_rule_idx, probabilities, valid_sample_idxs, query_intervals, [], []
+        return query_relations, valid_query_relations, refNode_sources, merged_valid_rule_idx, probabilities, valid_sample_idxs, query_intervals, [], [], final_preds
 
 
 

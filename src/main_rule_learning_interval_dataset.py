@@ -15,20 +15,24 @@ from multiprocessing import Process, Queue
 
 
 def save_rule_scores(data, option, experiment):
-    rule_scores = experiment.get_rule_scores()
+    rule_scores, refType_scores = experiment.get_rule_scores()
 
     path_suffix = '_' if not option.shift else '_time_shifting_'
     if not os.path.exists('../output/' + option.dataset + path_suffix[:-1]):
         os.mkdir('../output/' + option.dataset + path_suffix[:-1])
 
     for rel in range(data['num_rel']):
+        output = {}
+        output['rule_scores'] = rule_scores[rel, :].tolist()
+        output['refType_scores'] = [scores[rel, :].tolist() for scores in refType_scores]
+    
         cur_path = '../output/' + option.dataset + path_suffix[:-1] + '/' + option.dataset + path_suffix
         if option.shift and rel >= data['num_rel']//2:
             cur_path += 'fix_ref_time_'
         cur_path += 'rule_scores_rel_' + str(rel) + '.json'
-
+                
         with open(cur_path, 'w') as file:
-            json.dump(rule_scores[rel, :].tolist(), file)
+            json.dump(output, file)
 
 
 
@@ -73,7 +77,7 @@ def run_experiment(queue, gpu, train, test, from_model_ckpt, dataset, num_step, 
     tf.logging.set_verbosity(tf.logging.ERROR)
 
     processor = Data_preprocessor()
-    data = processor.prepare_data(option, process_walk_res=False)
+    data = processor.prepare_data(option, process_walk_res=True)
 
     learner = Learner(option, data)
     print("Learner built.")
@@ -100,19 +104,16 @@ def run_experiment(queue, gpu, train, test, from_model_ckpt, dataset, num_step, 
         if option.train:
             print("Start training...")
             experiment.train(idx_ls)
-
             save_rule_scores(data, option, experiment)
 
         if option.test:
             eval_aeIOU, eval_TAC, _ = experiment.test(idx_ls)
             res = {'aeIOU': eval_aeIOU, 'TAC': eval_TAC}
-            # print('aeIOU: ', np.mean(eval_aeIOU))
-            # print('TAC: ', np.mean(eval_TAC))
 
     experiment.close_log_file()
     if queue is not None:
         queue.put(res)
-    print("="*36 + "Finish" + "="*36)
+
 
 
 
@@ -165,7 +166,6 @@ def main():
             config['queue'] = queue
             experiment_configs.append(config)
 
-        experiment_configs = experiment_configs[:1]
 
 
     processes = []
@@ -175,17 +175,9 @@ def main():
         p.start()
 
     for p in processes:
-        if args.test:
-            p.join(timeout=900)  # Timeout after 900 seconds
-        else:
-            p.join()
+        p.join()
 
     if args.test:
-        for p in processes:
-            if p.is_alive():
-                print("Process " + str(p.pid) + " is still running. Terminating.")
-                p.terminate()
-
         results = []
         while not queue.empty():
             results.append(queue.get())
