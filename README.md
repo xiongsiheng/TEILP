@@ -50,7 +50,7 @@ python main_rule_learning_interval_dataset.py --dataset {$dataset name} --train
 
 Rule application:
 ```sh
-python main_rule_learning_interval_dataset.py --dataset {$dataset name} --test --from_model_ckpt {$your_model_location}
+python main_rule_learning_interval_dataset.py --dataset {$dataset name} --test
 ```
 
 #### For (timestamp-based) datasets: icews14, icews05-15, gdelt100
@@ -68,7 +68,7 @@ python main_rule_learning_timestamp_dataset.py --dataset {$dataset name} --train
 Rule application:
 ```sh
 python main_rule_application_timestamp_dataset.py --dataset {$dataset name}
-python main_rule_learning_timestamp_dataset.py --dataset {$dataset name} --test --from_model_ckpt {$your_model_location}
+python main_rule_learning_timestamp_dataset.py --dataset {$dataset name} --test
 ```
 
 ## Contact
