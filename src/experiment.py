@@ -27,7 +27,8 @@ class Experiment():
         self.valid_stats = []
         self.test_stats = []
         self.early_stopped = False
-        self.log_file = open(os.path.join(self.option.this_expsdir, "log.txt"), "w")
+        if self.option.create_log:
+            self.log_file = open(os.path.join(self.option.this_expsdir, "log.txt"), "w")
 
         if self.data['dataset_name'] in ['wiki', 'YAGO']:
             self.metrics = ['aeIOU', 'TAC']
@@ -43,44 +44,39 @@ class Experiment():
             # Shape: qq: [] * dummy_batch_size (num_events);  refNode_source: [(dummy_batch_size,)] * batch_size;
             #        res_random_walk: (num_rules_in_total_for_different_events, 2); [event_idx, rule_idx]
             #        probs: [[(num_timestamp, )] * dummy_batch_size ] * 8
-            qq, query_rels, refNode_source, res_random_walk, probs, valid_sample_idx, input_intervals, input_samples, _, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode)
+            qq, query_rels, refNode_source, res_random_walk, valid_sample_idx, input_intervals, input_samples, _, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode)
         else:
-            qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, valid_ref_event_idx, input_intervals, input_samples = myTEKG.graph.create_graph(batch_idx_ls, mode)
+            qq, hh, tt, mdb, connectivity, valid_sample_idx, valid_ref_event_idx, input_intervals, input_samples = myTEKG.graph.create_graph(batch_idx_ls, mode)
         
 
         if len(valid_sample_idx) == 0:
+            # all samples are invalid (no walk can be found)
             return [], [], []
 
-        if mode == "Train":
-            probs = np.array(probs).transpose(1, 0, 2)
-            
-            if self.option.flag_acceleration:
-                inputs = [query_rels, refNode_source, res_random_walk, probs]
-            else:
-                inputs = [qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, valid_ref_event_idx]
 
+        if mode == "Train":            
+            inputs = [query_rels, refNode_source, res_random_walk] if self.option.flag_acceleration else \
+                     [qq, hh, tt, mdb, connectivity, valid_sample_idx, valid_ref_event_idx]
             output = run_fn(self.sess, inputs)
+            preds, gts = [], []
         else:
             output = final_preds  # [(bacth_size, num_timestamp)] * (1 + int(flag_int))
 
-        preds, gts = [], []
-        if mode == "Test":
             # Obtain the predictions from the output.
-            for prob_t in output:
-                # prob_t: shape: (dummy_batch_size, num_timestamp)
-                prob_t = prob_t.reshape(-1)
-                prob_t = np.array(split_list_into_batches(prob_t, batch_size=len(timestamp_range)))
-                prob_t = self._rm_seen_time(flag_rm_seen_ts, valid_sample_idx, input_samples, prob_t, train_edges, timestamp_range)
-                preds.append(prob_t)
-            preds = self._adjust_preds_based_on_dur(preds, batch_idx_ls, valid_sample_idx, pred_dur_dict, qq)
+            if len(output[0]) == 0:
+                # Since there is no walk for the sample, we just random guess the time.
+                preds = [[1900, 2000] for _ in range(len(valid_sample_idx))]
+            else:
+                preds = []
+                for prob_t in output:
+                    # prob_t: shape: (dummy_batch_size, num_timestamp)
+                    prob_t = prob_t.reshape(-1)
+                    prob_t = np.array(split_list_into_batches(prob_t, batch_size=len(timestamp_range)))
+                    prob_t = self._rm_seen_time(flag_rm_seen_ts, valid_sample_idx, input_samples, prob_t, train_edges, timestamp_range)
+                    preds.append(prob_t)
+                preds = self._adjust_preds_based_on_dur(preds, batch_idx_ls, valid_sample_idx, pred_dur_dict, qq)
             
             gts = np.array(input_intervals)[valid_sample_idx]
-
-        # print('preds:')
-        # print(preds)
-        # print('gts:')
-        # print(gts)
-        # print('---------------------------------')
 
         return output, preds, gts
 
@@ -128,7 +124,7 @@ class Experiment():
     def running_model(self, batch_size, idx_ls, mode, flag_rm_seen_ts):
         epoch_loss, epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE = [], [], [], []
         myTEKG = TEKG(self.option, self.data)
-        run_fn = self.learner.update if mode == "Train" else self.learner.predict
+        run_fn = self.learner.update if mode == "Train" else None
 
         timestamp_range = self.data['timestamp_range']
         train_edges = self.data['train_edges']
@@ -150,12 +146,15 @@ class Experiment():
         if mode == "Train":
             if len(epoch_loss) == 0:
                 epoch_loss = [100]
+            
             msg = self.msg_with_time(
                     "Epoch %d mode %s Loss %0.4f " 
                     % (self.epoch+1, mode, np.mean(epoch_loss)))
-            save_data(self.option.savetxt, msg)
-            self.log_file.write(msg + "\n")
+
+            if self.option.create_log:
+                self.log_file.write(msg + "\n")
             print("Epoch %d mode %s Loss %0.4f " % (self.epoch+1, mode, np.mean(epoch_loss)))
+            
             return epoch_loss
         else:
             return epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE
@@ -220,9 +219,9 @@ class Experiment():
                                          global_step=self.epoch)
             print("Model saved at %s" % model_path)
 
-            # if self.early_stop():
-            #     self.early_stopped = True
-            #     print("Early stopped at epoch %d" % (self.epoch))
+            if self.early_stop():
+                self.early_stopped = True
+                print("Early stopped at epoch %d" % (self.epoch))
 
 
     def test(self, total_idx=None):
@@ -235,7 +234,6 @@ class Experiment():
         if self.option.flag_acceleration:
             rule_scores, refType_scores = self.learner.get_rule_scores_acc(self.sess)
             return rule_scores, refType_scores
-
 
     def close_log_file(self):
         self.log_file.close()

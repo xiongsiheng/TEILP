@@ -14,9 +14,6 @@ class Learner(object):
         self.norm = not option.no_norm
         self.thr = option.thr
         self.dropout = option.dropout
-        self.learning_rate = option.learning_rate
-        self.accuracy = option.accuracy
-        self.top_k = option.top_k
 
         self.num_entity = data['num_entity']
         self.num_operator = data['num_rel']
@@ -322,17 +319,14 @@ class Learner(object):
         self.query_rels = tf.placeholder(tf.int32, [None])   # (dummy_batch_size) num_relevant_events in a batch
         self.refNode_source = tf.placeholder(tf.float32, [None, None])  # show where the refNode comes from (batch_size, dummy_batch_size)
         
-        num_cases = 8 if self.flag_int else 2
-        self.random_walk_prob = tf.placeholder(tf.float32, [None, num_cases, self.num_rule])  # (dummy_batch_size, num_cases, num_rule)
-        self.random_walk_ind = tf.placeholder(tf.float32, [None, 2, self.num_rule])  # (dummy_batch_size, 2, num_rule)
-
-
+        # Todo: ruleLen_split_ver
         if self.flag_ruleLen_split:
-            # [tqs, tqe] X [last_event, first_event] X [ts, te]
-            self.probs = tf.placeholder(tf.float32, [None, 4*(int(self.flag_int)+1), self.num_step-1, None])
+            print('Todo: ruleLen_split_ver')
+            pass
         else:
-            # Shape: train: (dummy_batch_size, 4*(int(self.flag_int)+1), 1), test: (dummy_batch_size, 4*(int(self.flag_int)+1), num_timestamp)
-            self.probs = tf.placeholder(tf.float32, [None, 4*(int(self.flag_int)+1), None])  
+            num_cases = 8 if self.flag_int else 2   # [tqs, tqe] X [last_event, first_event] X [ts, te]
+            self.random_walk_prob = tf.placeholder(tf.float32, [None, num_cases, self.num_rule])  # (dummy_batch_size, num_cases, num_rule)
+            self.random_walk_ind = tf.placeholder(tf.float32, [None, 2, self.num_rule])  # (dummy_batch_size, 2, num_rule)
 
 
         # attention vec for different rules given the query relation
@@ -349,31 +343,11 @@ class Learner(object):
         self.attn_refType = attn_refType
     
         if self.flag_ruleLen_split:
-            # Todo: update the code since we now use random_walk_prob instead of probs
-            refNode_probs_mat = self.random_walk_prob * attn_rule
-            ruleLen_table = [tf.nn.embedding_lookup(self.ruleLen_embedding[l], self.query_rels) for l in range(self.num_step-1)]
-            refNode_probs = [tf.reduce_sum(refNode_probs_mat * ruleLen_table[l], axis=1, keep_dims=True) for l in range(self.num_step-1)]
-
-            self.pred = []
-            for i in range(int(self.flag_int)+1):
-                probs_from_refNode = [attn_refType[3*i+2][:, 0:1] * (attn_refType[3*i][:, 0:1] * self.probs[:,4*i,l,:] + attn_refType[3*i][:, 1:2] * self.probs[:,4*i+1,l,:]) + \
-                                      attn_refType[3*i+2][:, 1:2] * (attn_refType[3*i+1][:, 0:1]*self.probs[:,4*i+2,l,:] + attn_refType[3*i+1][:, 1:2] * self.probs[:,4*i+3,l,:]) \
-                                      for l in range(self.num_step-1)]
-                pred_refNode = 0
-                for l in range(self.num_step-1):
-                    pred_refNode += refNode_probs[l] * probs_from_refNode[l]
-
-                self.pred.append(tf.matmul(self.refNode_source, pred_refNode))
-                
+            pass    
         else:
             # prob we arrive at different reference events
-            refNode_attn = []
-            for i in range(num_cases):
-                refNode_attn.append(tf.reduce_sum(self.random_walk_prob[:, i, :] * attn_rule, axis=1, keep_dims=True))  # shape: (dummy_batch_size, 1)
-            
-            refNode_attn_norm = []
-            for i in range(2):
-                refNode_attn_norm.append(tf.reduce_sum(self.random_walk_ind[:, i, :] * attn_rule, axis=1, keep_dims=True))  # shape: (dummy_batch_size, 1)
+            refNode_attn = [tf.reduce_sum(self.random_walk_prob[:, i, :] * attn_rule, axis=1, keep_dims=True) for i in range(num_cases)]  # shape: (dummy_batch_size, 1)
+            refNode_attn_norm = [tf.reduce_sum(self.random_walk_ind[:, i, :] * attn_rule, axis=1, keep_dims=True) for i in range(2)]  # shape: (dummy_batch_size, 1)
             
             self.pred = []
             for i in range(int(self.flag_int)+1):
@@ -435,7 +409,7 @@ class Learner(object):
         return graph_output
 
 
-    def _run_graph_acc(self, sess, query_rels, refNode_source, res_random_walk, probs, to_fetch):
+    def _run_graph_acc(self, sess, query_rels, refNode_source, res_random_walk, to_fetch):
         feed = {}
         feed[self.query_rels] = query_rels
         feed[self.refNode_source] = refNode_source
@@ -451,8 +425,6 @@ class Learner(object):
                     random_walk_ind[x, min(i, 1), y] = 1
         feed[self.random_walk_prob] = random_walk_prob
         feed[self.random_walk_ind] = random_walk_ind
-
-        feed[self.probs] = probs
 
         fetches = to_fetch
         graph_output = sess.run(fetches, feed)

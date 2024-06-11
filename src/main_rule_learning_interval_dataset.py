@@ -9,7 +9,7 @@ from model import Learner
 from experiment import Experiment
 from gadgets import *
 from utlis import *
-from multiprocessing import Process, Queue
+from joblib import Parallel, delayed
 
 
 
@@ -36,36 +36,32 @@ def save_rule_scores(data, option, experiment):
 
 
 
-def run_experiment(queue, gpu, train, test, from_model_ckpt, dataset, num_step, num_layer, rnn_state_size, query_embed_size,
-                   batch_size, print_per_batch, max_epoch, min_epoch, learning_rate, no_norm, thr, dropout, accuracy, top_k, shift, idx_ls):
-    # Set up the experiment configuration
-    d = {
-        'gpu': gpu,
-        'train': train,
-        'test': test,
-        'from_model_ckpt': from_model_ckpt,
-        'dataset': dataset,
-        'num_step': num_step,
-        'num_layer': num_layer,
-        'rnn_state_size': rnn_state_size,
-        'query_embed_size': query_embed_size,
-        'batch_size': batch_size,
-        'print_per_batch': print_per_batch,
-        'max_epoch': max_epoch,
-        'min_epoch': min_epoch,
-        'learning_rate': learning_rate,
-        'no_norm': no_norm,
-        'thr': thr,
-        'dropout': dropout,
-        'accuracy': accuracy,
-        'top_k': top_k,
-        'shift': shift,
-    }
 
+def main():
+    parser = argparse.ArgumentParser(description="Experiment setup")
+    parser.add_argument('--gpu', default="0", type=str)
+    parser.add_argument('--train', default=False, action="store_true")
+    parser.add_argument('--test', default=False, action="store_true")
+    parser.add_argument('--from_model_ckpt', default=None, type=str)
+    parser.add_argument('--dataset', default=None, type=str)
+    parser.add_argument('--shift', default=0, type=int)
+
+    d = vars(parser.parse_args())
     option = Option(d)
     option.tag = time.strftime("%y-%m-%d-%H-%M")
     option.exps_dir = '../exps/'
     option.seed = 33
+    
+    option.num_layer = 1
+    option.rnn_state_size = 128
+    option.query_embed_size = 128
+    option.no_norm = False
+    option.thr = 1e-20
+    option.dropout = 0.
+    option.max_epoch = 30
+    option.min_epoch = 5
+    option.create_log = False
+
     option.different_states_for_rel_and_TR = False
     option.flag_acceleration = True   # only shallow layers are used
     option.flag_ruleLen_split_ver = False
@@ -79,112 +75,56 @@ def run_experiment(queue, gpu, train, test, from_model_ckpt, dataset, num_step, 
     processor = Data_preprocessor()
     data = processor.prepare_data(option, process_walk_res=True)
 
-    learner = Learner(option, data)
-    print("Learner built.")
 
-    saver = tf.train.Saver(max_to_keep=option.max_epoch)
-    config = tf.ConfigProto()
-    config.gpu_options.allow_growth = False
-    config.log_device_placement = False
-    config.allow_soft_placement = True
+    if option.train:
+        learner = Learner(option, data)
+        print("Learner built.")
+  
+        saver = tf.train.Saver(max_to_keep=option.max_epoch)
+        config = tf.ConfigProto()
+        config.gpu_options.allow_growth = False
+        config.log_device_placement = False
+        config.allow_soft_placement = True
+        
+        with tf.Session(config=config) as sess:
+            tf.set_random_seed(option.seed)
+            sess.run(tf.global_variables_initializer())
+            print("Session initialized.")
 
-    
-    with tf.Session(config=config) as sess:
-        tf.set_random_seed(option.seed)
-        sess.run(tf.global_variables_initializer())
-        print("Session initialized.")
+            if option.from_model_ckpt is not None:
+                saver.restore(sess, option.from_model_ckpt)
+                print("Checkpoint restored from model %s" % option.from_model_ckpt)
 
-        if option.from_model_ckpt is not None:
-            saver.restore(sess, option.from_model_ckpt)
-            print("Checkpoint restored from model %s" % option.from_model_ckpt)
-
-        experiment = Experiment(sess, saver, option, learner, data)
-        print("Experiment created.")
-
-        if option.train:
+            experiment = Experiment(sess, saver, option, learner, data)
+            print("Experiment created.")
+           
             print("Start training...")
             experiment.train(idx_ls)
             save_rule_scores(data, option, experiment)
+        
+            experiment.close_log_file()
+    else:
+        experiment = Experiment(None, None, option, None, data)
+        print("Experiment created.")
 
-        if option.test:
-            eval_aeIOU, eval_TAC, _ = experiment.test(idx_ls)
-            res = {'aeIOU': eval_aeIOU, 'TAC': eval_TAC}
+        num_batches = 24
+        idx_ls = split_list_into_batches(data['test_idx_ls'], num_batches=num_batches)
+        outputs = Parallel(n_jobs=num_batches)(
+                delayed(experiment.test)(idx_batch) for idx_batch in idx_ls
+                )
+        
+        eval_aeIOU, eval_TAC = [], []
+        for output in outputs:
+            eval_aeIOU += output[0]
+            eval_TAC += output[1]
 
-    experiment.close_log_file()
-    if queue is not None:
-        queue.put(res)
-
-
-
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Experiment setup")
-    parser.add_argument('--gpu', default="0", type=str)
-    parser.add_argument('--train', default=False, action="store_true")
-    parser.add_argument('--test', default=False, action="store_true")
-    parser.add_argument('--from_model_ckpt', default=None, type=str)
-    parser.add_argument('--dataset', default=None, type=str)
-    parser.add_argument('--num_step', default=3, type=int)
-    parser.add_argument('--num_layer', default=1, type=int)
-    parser.add_argument('--rnn_state_size', default=128, type=int)
-    parser.add_argument('--query_embed_size', default=128, type=int)
-    parser.add_argument('--batch_size', default=64, type=int)
-    parser.add_argument('--print_per_batch', default=3, type=int)
-    parser.add_argument('--max_epoch', default=30, type=int)
-    parser.add_argument('--min_epoch', default=5, type=int)
-    parser.add_argument('--learning_rate', default=0.001, type=float)
-    parser.add_argument('--no_norm', default=False, action="store_true")
-    parser.add_argument('--thr', default=1e-20, type=float)
-    parser.add_argument('--dropout', default=0., type=float)
-    parser.add_argument('--accuracy', default=False, action="store_true")
-    parser.add_argument('--top_k', default=10, type=int)
-    parser.add_argument('--shift', default=0, type=int)
-
-    args = parser.parse_args()
-
-
-    # Create a list of configurations for different experiments
-    config = {}
-    config.update(vars(args))
-    config['idx_ls'] = None
-    config['queue'] = None
-    experiment_configs = [config]
-    
-
-    if args.test:
-        processor = Data_preprocessor()
-        data = processor.prepare_data(args, save_option=False, process_walk_res=False)
-        queue = Queue()
-        experiment_configs = []
-
-        # To accelerate the testing process, we split the test set into multiple pieces, and run the experiments in parallel.
-        for idx_ls in split_list_into_batches(data['test_idx_ls'], num_batches=20):
-            config = {}
-            config.update(vars(args))
-            config['idx_ls'] = idx_ls
-            config['queue'] = queue
-            experiment_configs.append(config)
+        print('aeIOU: ', np.mean(eval_aeIOU), len(eval_aeIOU))
+        print('TAC: ', np.mean(eval_TAC), len(eval_TAC))
 
 
 
-    processes = []
-    for config in experiment_configs:
-        p = Process(target=run_experiment, kwargs=config)
-        processes.append(p)
-        p.start()
 
-    for p in processes:
-        p.join()
 
-    if args.test:
-        results = []
-        while not queue.empty():
-            results.append(queue.get())
-        aeIOU = np.concatenate([res['aeIOU'] for res in results])
-        TAC = np.concatenate([res['TAC'] for res in results])
-        print('aeIOU: ', np.mean(aeIOU), len(aeIOU))
-        print('TAC: ', np.mean(TAC), len(TAC))
 
 
 if __name__ == "__main__":
