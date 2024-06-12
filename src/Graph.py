@@ -857,4 +857,8 @@ class TEKG(Base):
         # idx_complete = 4*idx_event_pos + 2*idx_query_time + idx_ref_time
         qq, hh, tt, probs, valid_sample_idx, valid_ref_event_idx = self._format_outputs(idx_ls, query_nodes, batch_nodes, num_entity, prob_dict, mode)
         input_samples, final_preds = None, None
+        
+        print(probs)
+        sys.exit()
+
         return qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, valid_ref_event_idx, input_intervals, input_samples, final_preds

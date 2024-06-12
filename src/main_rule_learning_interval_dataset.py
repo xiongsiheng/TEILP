@@ -69,14 +69,17 @@ def main():
     option.flag_state_vec_enhancement = False
     option.prob_type_for_training = ['max', 'mean'][0]
     
-    # If we use both RNN and shallow layers, it is better to sample the training data.
+    # If we use both RNN and shallow layers, it is better to sample the training data for efficiency.
     option.num_samples_per_rel = -1 if option.flag_acceleration else 500
 
     os.environ["CUDA_VISIBLE_DEVICES"] = option.gpu
     tf.logging.set_verbosity(tf.logging.ERROR)
 
     processor = Data_preprocessor()
-    data = processor.prepare_data(option, process_walk_res=False)
+    # For the first time, set process_walk_res=True to generate the walk results.
+    # After that, set it to False to load the walk results directly.
+    # Once we change the setting, we need to re-generate the walk results.
+    data = processor.prepare_data(option, process_walk_res=True)
 
 
     if option.train:

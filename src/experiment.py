@@ -179,6 +179,12 @@ class Experiment():
 
     def one_epoch_train(self, total_idx=None):
         batch_size = 8 if self.option.flag_acceleration else 4
+        
+        if total_idx is None:
+            # Randomly sample the training data if the option is choosen.
+            processor = Data_preprocessor()
+            total_idx = processor._trainig_data_sampling(self.data['train_edges'], self.data['num_rel'], num_sample_per_rel=self.option.num_samples_per_rel)
+        
         loss = self.one_epoch("Train", total_idx=total_idx, batch_size=batch_size)
         self.train_stats.append([loss])
 

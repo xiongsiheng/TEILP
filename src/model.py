@@ -495,9 +495,9 @@ class Learner(object):
 
     def update(self, sess, inputs):
         if self.flag_acceleration:
-            qq, refNode_source, res_random_walk, probs = inputs 
+            qq, refNode_source, res_random_walk = inputs 
             to_fetch = [self.final_loss, self.optimizer_step]
-            fetched = self._run_comp_graph_fast_ver(sess, qq, refNode_source, res_random_walk, probs, to_fetch)
+            fetched = self._run_comp_graph_fast_ver(sess, qq, refNode_source, res_random_walk, to_fetch)
         else:
             qq, hh, tt, mdb, connectivity, probs, valid_sample_idx = inputs
             to_fetch = [self.final_loss, self.optimizer_step]

@@ -70,7 +70,7 @@ class Data_preprocessor():
 
             data['num_samples_dist'] = [16000, 2000, 2000]
 
-        data['train_idx_ls'] = self._trainig_data_sampling(data['train_edges'], data['num_rel'], num_sample_per_rel=option.num_samples_per_rel)
+        data['train_idx_ls'] = list(range(data['num_samples_dist'][0]))
         data['valid_idx_ls'] = list(range(data['num_samples_dist'][0], data['num_samples_dist'][0] + data['num_samples_dist'][1]))
         data['test_idx_ls'] = list(range(data['num_samples_dist'][0] + data['num_samples_dist'][1], np.sum(data['num_samples_dist'])))
 
