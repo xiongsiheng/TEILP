@@ -68,12 +68,15 @@ def main():
     option.flag_use_dur = False
     option.flag_state_vec_enhancement = False
     option.prob_type_for_training = ['max', 'mean'][0]
+    
+    # If we use both RNN and shallow layers, it is better to sample the training data.
+    option.num_samples_per_rel = -1 if option.flag_acceleration else 500
 
     os.environ["CUDA_VISIBLE_DEVICES"] = option.gpu
     tf.logging.set_verbosity(tf.logging.ERROR)
 
     processor = Data_preprocessor()
-    data = processor.prepare_data(option, process_walk_res=True)
+    data = processor.prepare_data(option, process_walk_res=False)
 
 
     if option.train:
@@ -99,7 +102,7 @@ def main():
             print("Experiment created.")
            
             print("Start training...")
-            experiment.train(idx_ls)
+            experiment.train()
             save_rule_scores(data, option, experiment)
         
             experiment.close_log_file()

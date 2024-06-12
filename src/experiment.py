@@ -44,10 +44,10 @@ class Experiment():
             # Shape: qq: [] * dummy_batch_size (num_events);  refNode_source: [(dummy_batch_size,)] * batch_size;
             #        res_random_walk: (num_rules_in_total_for_different_events, 2); [event_idx, rule_idx]
             #        probs: [[(num_timestamp, )] * dummy_batch_size ] * 8
-            qq, query_rels, refNode_source, res_random_walk, valid_sample_idx, input_intervals, input_samples, _, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode)
+            qq, query_rels, refNode_source, res_random_walk, valid_sample_idx, input_intervals, input_samples, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode)
         else:
-            qq, hh, tt, mdb, connectivity, valid_sample_idx, valid_ref_event_idx, input_intervals, input_samples = myTEKG.graph.create_graph(batch_idx_ls, mode)
-        
+            qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, valid_ref_event_idx, input_intervals, input_samples, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode)
+
 
         if len(valid_sample_idx) == 0:
             # all samples are invalid (no walk can be found)
@@ -56,7 +56,7 @@ class Experiment():
 
         if mode == "Train":            
             inputs = [query_rels, refNode_source, res_random_walk] if self.option.flag_acceleration else \
-                     [qq, hh, tt, mdb, connectivity, valid_sample_idx, valid_ref_event_idx]
+                     [qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx]
             output = run_fn(self.sess, inputs)
             preds, gts = [], []
         else:
@@ -121,18 +121,16 @@ class Experiment():
         return preds
 
 
-    def running_model(self, batch_size, idx_ls, mode, flag_rm_seen_ts):
-        epoch_loss, epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE = [], [], [], []
-        myTEKG = TEKG(self.option, self.data)
-        run_fn = self.learner.update if mode == "Train" else None
-
+    def running_model(self, model, run_fn, batch_size, idx_ls, mode, flag_rm_seen_ts):
         timestamp_range = self.data['timestamp_range']
         train_edges = self.data['train_edges']
         pred_dur_dict = self.data['pred_dur'] if self.option.flag_use_dur else None
 
         idx_ls = split_list_into_batches(idx_ls, batch_size=batch_size)
+        
+        epoch_loss, epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE = [], [], [], []
         for batch_idx_ls in tqdm(idx_ls, desc=mode):
-            output, preds, gts = self._calculate_output(myTEKG, run_fn, batch_idx_ls, mode, flag_rm_seen_ts, train_edges, timestamp_range, pred_dur_dict)
+            output, preds, gts = self._calculate_output(model, run_fn, batch_idx_ls, mode, flag_rm_seen_ts, train_edges, timestamp_range, pred_dur_dict)
             if mode == "Train":
                 epoch_loss += list(output)
             else:
@@ -147,14 +145,13 @@ class Experiment():
             if len(epoch_loss) == 0:
                 epoch_loss = [100]
             
-            msg = self.msg_with_time(
+            if self.option.create_log:
+                msg = self.msg_with_time(
                     "Epoch %d mode %s Loss %0.4f " 
                     % (self.epoch+1, mode, np.mean(epoch_loss)))
-
-            if self.option.create_log:
                 self.log_file.write(msg + "\n")
-            print("Epoch %d mode %s Loss %0.4f " % (self.epoch+1, mode, np.mean(epoch_loss)))
             
+            print("Epoch %d mode %s Loss %0.4f " % (self.epoch+1, mode, np.mean(epoch_loss)))
             return epoch_loss
         else:
             return epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE
@@ -165,36 +162,39 @@ class Experiment():
         if self.data['dataset_name'] in ['icews14', 'icews05-15', 'gdelt'] and not self.option.shift:
             flag_rm_seen_ts = True
 
-        if mode == "Train":
-            idx_ls = total_idx if total_idx is not None else self.data['train_idx_ls']
-            random.shuffle(idx_ls)
-            epoch_loss = self.running_model(batch_size, idx_ls, mode, flag_rm_seen_ts)
-            return epoch_loss   
-        elif mode == "Valid":
-            idx_ls = total_idx if total_idx is not None else self.data['valid_idx_ls']
-        else:
-            idx_ls = total_idx if total_idx is not None else self.data['test_idx_ls']
+        # Create the model based on the option. 
+        myTEKG = TEKG_family(self.option, self.data)
 
-        epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE = self.running_model(batch_size, idx_ls, mode, flag_rm_seen_ts)
-        
-        return [epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE]
+        # To accelerate the inference, we use online algorithm to calculate the output instead of re-running the model.
+        run_fn = self.learner.update if mode == "Train" else None
+
+        # Prepare the index list for the current mode.
+        idx_ls_dict = {"Train": self.data['train_idx_ls'], "Valid": self.data['valid_idx_ls'], "Test": self.data['test_idx_ls']}
+        idx_ls = total_idx if total_idx is not None else idx_ls_dict[mode]
+        if mode == "Train":
+            random.shuffle(idx_ls)
+     
+        return self.running_model(myTEKG, run_fn, batch_size, idx_ls, mode, flag_rm_seen_ts)
 
 
     def one_epoch_train(self, total_idx=None):
-        loss = self.one_epoch("Train", total_idx=total_idx, batch_size=8)
+        batch_size = 8 if self.option.flag_acceleration else 4
+        loss = self.one_epoch("Train", total_idx=total_idx, batch_size=batch_size)
         self.train_stats.append([loss])
 
 
     def one_epoch_valid(self, total_idx=None):
-        eval1 = self.one_epoch("Valid", total_idx=total_idx, batch_size=8)
+        batch_size = 8 if self.option.flag_acceleration else 4
+        eval1 = self.one_epoch("Valid", total_idx=total_idx, batch_size=batch_size)
         self.valid_stats.append([eval1])
         self.best_valid_eval1 = max(self.best_valid_eval1, np.mean(eval1[0]))
 
-    def one_epoch_test(self, total_idx=None):
-        eval1 = self.one_epoch("Test", total_idx=total_idx, batch_size=8)
-        # self.test_stats.append(eval1)
-        return eval1
 
+    def one_epoch_test(self, total_idx=None):
+        batch_size = 8 if self.option.flag_acceleration else 4
+        eval1 = self.one_epoch("Test", total_idx=total_idx, batch_size=batch_size)
+        self.test_stats.append([eval1])
+        return eval1
 
 
     def early_stop(self):

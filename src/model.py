@@ -15,8 +15,8 @@ class Learner(object):
         self.thr = option.thr
         self.dropout = option.dropout
 
-        self.num_entity = data['num_entity']
-        self.num_operator = data['num_rel']
+        # self.num_entity = data['num_entity']  # dynamic
+        self.num_relation = data['num_rel']
         self.num_TR = data['num_TR']
         self.num_rule = option.num_rule
         self.num_timestamp = len(data['timestamp_range'])
@@ -27,23 +27,20 @@ class Learner(object):
         self.flag_int = option.flag_interval
         self.flag_rel_TR_split = option.different_states_for_rel_and_TR
         self.flag_ruleLen_split = option.flag_ruleLen_split_ver
-        self.flag_state_vec_enhan = option.flag_state_vec_enhancement
+        self.flag_state_vec_enhance = option.flag_state_vec_enhancement
         self.flag_acceleration = option.flag_acceleration
         self.flag_loss_scaling_factor = 0.04  # YAGO, wiki
 
         np.random.seed(self.seed)
 
         if option.flag_ruleLen_split_ver:
-            if self.flag_acceleration:
-                self._init_ruleLen_embedding(data['pattern_ls'])
-                self._build_graph_acc_ver()
-            else:
-                self._build_graph_ruleLen_split_ver()
+            print('Todo: ruleLen_split_ver')
+            pass
         else:
             if self.flag_acceleration:
-                self._build_graph_acc_ver()
+                self._build_comp_graph_fast_ver()
             else:
-                self._build_graph()
+                self._build_comp_graph()
 
 
     def _init_ruleLen_embedding(self, pattern_ls):
@@ -99,11 +96,14 @@ class Learner(object):
         return normalized_attn
 
 
-    def _build_input(self):
+    def _build_rnn_inputs(self, num_entity):
+        '''
+        Build RNN inputs for rule score learning.
+        '''
         self.tails = tf.placeholder(tf.int32, [None])
         self.heads = tf.placeholder(tf.int32, [None])
-        self.targets_h = tf.one_hot(indices=self.heads, depth=self.num_entity)
-        self.targets_t = tf.one_hot(indices=self.tails, depth=self.num_entity)
+        self.targets_h = tf.one_hot(indices=self.heads, depth=num_entity)
+        self.targets_t = tf.one_hot(indices=self.tails, depth=num_entity)
 
 
         self.query_rels = tf.placeholder(tf.int32, [None])
@@ -111,7 +111,7 @@ class Learner(object):
         self.query_embedding_params = tf.Variable(self._random_uniform_unit(
                                                       self.num_query + 1, # <END> token 
                                                       self.query_embed_size), 
-                                                  dtype=tf.float32)
+                                                      dtype=tf.float32)
 
         rnn_inputs = tf.nn.embedding_lookup(self.query_embedding_params, 
                                             self.queries)
@@ -120,26 +120,31 @@ class Learner(object):
 
 
     def _build_variables(self):
-        rnn_inputs = self._build_input()
-        self.rnn_inputs = [tf.reshape(q, [-1, self.query_embed_size]) for q in tf.split(rnn_inputs, self.num_step, axis=1)]
-
         # Different channels: [tqs, tqe] X [last_event, first_event] X [ts, te] 
         # Order: 000, 001, 010, 011, 100, 101, 110, 111
-        self.probs = tf.placeholder(tf.float32, [None, 4*(int(self.flag_int)+1), self.num_entity])      
+        num_cases = 8 if self.flag_int else 2
+        self.probs = tf.placeholder(tf.float32, [None, num_cases, None])   
+        num_entity = tf.shape(self.probs)[-1]
+
+        rnn_inputs = self._build_rnn_inputs(num_entity)
+        self.rnn_inputs = [tf.reshape(q, [-1, self.query_embed_size]) for q in tf.split(rnn_inputs, self.num_step, axis=1)]
+
+   
         
-        self.database = {r: tf.sparse_placeholder(
-                            dtype=tf.float32, 
-                            name="database_%d" % r)
-                            for r in range(self.num_operator)}
+        # Connectivity matrix for differen relations (predicates)
+        self.connectivity_rel = {idx_rel: tf.sparse_placeholder(
+                                            dtype=tf.float32, 
+                                            name="connectivity_rel_%d" % idx_rel)
+                                            for idx_rel in range(self.num_relation)}
 
-        self.connectivity = {TR: tf.sparse_placeholder(
-                            dtype=tf.float32,
-                            name="connectivity_%d" % TR)
-                            for TR in range(self.num_TR)}
+        # Connectivity matrix for differen TRs: [0: ukn, 1: bf, 2: touch, 3: af]
+        self.connectivity_TR = {idx_TR: tf.sparse_placeholder(
+                                        dtype=tf.float32,
+                                        name="connectivity_TR_%d" % idx_TR)
+                                        for idx_TR in range(self.num_TR)}
 
+        # Instead of using multiple RNNs for different relations and TRs, we use a single RNN with a longer hidden state vector.
         cellLen = self.rnn_state_size*4 if self.flag_rel_TR_split else self.rnn_state_size*2
-        cellLen *= 2 if self.flag_int else 1
-
         cell = tf.nn.rnn_cell.LSTMCell(cellLen, state_is_tuple=True)
         self.cell = tf.nn.rnn_cell.MultiRNNCell([cell] * self.num_layer, 
                                                     state_is_tuple=True)
@@ -150,47 +155,51 @@ class Learner(object):
                                                 self.rnn_inputs,
                                                 initial_state=init_state)
 
-        # Different channels: [tqs, tqe] X [last_event, first_event]
-        # Order: 00, 01, 10, 11
-        self.W_rel = tf.Variable(np.random.randn(self.rnn_state_size, 2*(int(self.flag_int)+1), self.num_operator), dtype=tf.float32)
-        self.b_rel = tf.Variable(np.zeros((1, 2*(int(self.flag_int)+1), self.num_operator)), dtype=tf.float32)
+        # Different channels: [last_event, first_event]
+        self.W_rel = tf.Variable(np.random.randn(self.rnn_state_size, 2, self.num_relation), dtype=tf.float32)
+        self.b_rel = tf.Variable(np.zeros((1, 2, self.num_relation)), dtype=tf.float32)
         
-        self.W_TR = tf.Variable(np.random.randn(self.rnn_state_size, 2*(int(self.flag_int)+1), self.num_TR), dtype=tf.float32)
-        self.b_TR = tf.Variable(np.zeros((1, 2*(int(self.flag_int)+1), self.num_TR)), dtype=tf.float32)
+        self.W_TR = tf.Variable(np.random.randn(self.rnn_state_size, 2, self.num_TR), dtype=tf.float32)
+        self.b_TR = tf.Variable(np.zeros((1, 2, self.num_TR)), dtype=tf.float32)
 
 
-        # Different elements: [tqs, tqe] X [last_event, first_event]
-        # each combination uses self.rnn_state_size entry in the rnn_output
-        self.attn_rel = []
-        for i in range(2*(int(self.flag_int)+1)):
+        # Different cases: [last_event, first_event]
+        # each uses self.rnn_state_size entry in the rnn_output
+        self.attn_rel, self.attn_TR = [], []
+        for idx_event_pos in range(2):
+            state_start_pos = self.rnn_state_size*idx_event_pos if not self.flag_rel_TR_split else self.rnn_state_size*(2*idx_event_pos)
             self.attn_rel.append([tf.split(tf.nn.softmax(
-                                  tf.matmul(rnn_output[:, self.rnn_state_size*i:self.rnn_state_size*(i+1)], self.W_rel[:, i, :]) + self.b_rel[:, i, :],
-                                   axis=1), self.num_operator, axis=1) 
-                                  for rnn_output in self.rnn_outputs])     # todo: check rnn_output[:, self.rnn_state_size*i:self.rnn_state_size*(i+1)]
+                                  tf.matmul(rnn_output[:, state_start_pos:state_start_pos + self.rnn_state_size], 
+                                            self.W_rel[:, idx_event_pos, :]) + self.b_rel[:, idx_event_pos, :], axis=1), self.num_relation, axis=1) 
+                                            for rnn_output in self.rnn_outputs])
 
-        # if self.flag_rel_TR_split, the RNN output will be split into two parts, the first half for relation and the second for TR;
-        # otherwise, the RNN output will be used for both relation and TR
-        idx_start_TR = self.rnn_state_size*2*(int(self.flag_int)+1) if self.flag_rel_TR_split else 0
-
-        self.attn_TR = []
-        for i in range(2*(int(self.flag_int)+1)):
+            # if self.flag_rel_TR_split, the RNN output will be split into four parts: [last event rel, last event TR, first event rel, first event TR]
+            # otherwise, the RNN output will be split into two parts: [last event, first event]
+            state_start_pos += 0 if not self.flag_rel_TR_split else self.rnn_state_size
             self.attn_TR.append([tf.split(tf.nn.softmax(
-                                  tf.matmul(rnn_output[:, idx_start_TR + self.rnn_state_size*i: idx_start_TR + self.rnn_state_size*(i+1)], 
-                                            self.W_TR[:, i, :]) + self.b_TR[:, i, :], axis=1), self.num_TR, axis=1) 
-                                            for rnn_output in self.rnn_outputs])     # todo: check rnn_output[:, self.rnn_state_size*i:self.rnn_state_size*(i+1)]        
-
-
-        # Different elements: [tqs, tqe] x [last_event, first_event]
-        self.attn_memories = [[] for _ in range(2*(int(self.flag_int)+1))]
-
-        self.memories = [tf.expand_dims(tf.one_hot(indices=self.heads, depth=self.num_entity), 1),
-                         tf.expand_dims(tf.one_hot(indices=self.tails, depth=self.num_entity), 1)] * (int(self.flag_int)+1)
-        self.memories = sum(self.memories, [])
+                                  tf.matmul(rnn_output[:, state_start_pos: state_start_pos+ self.rnn_state_size], 
+                                            self.W_TR[:, idx_event_pos, :]) + self.b_TR[:, idx_event_pos, :], axis=1), self.num_TR, axis=1) 
+                                            for rnn_output in self.rnn_outputs])      
         
-        # [tqs, tqe] * [(first_event, last_event) , (first_ts, first_te), (last_ts, last_te)]
-        self.attn_refType_embed = [tf.Variable(self._random_uniform_unit(self.num_query, 2), dtype=tf.float32)] * 3 * (int(self.flag_int)+1)
+        # attention_memories: (will be) a list of num_step tensors,
+        # each of size (batch_size, t+1),
+        # where t is the current step (zero indexed).
+        # Each tensor represents the attention over currently populated memory cells. 
+        # we will have a list of attention_memories: [last_event, first_event]
+        self.attn_memories_ls = [[] for _ in range(2)]
 
-        if self.flag_state_vec_enhan:
+        # memories: (will be) a tensor of size (batch_size, t+1, num_entity),
+        # where t is the current step (zero indexed)
+        # Then tensor represents currently populated memory cells.
+        # we will have a list of memories: [last_event, first_event]
+        self.memories_ls = [tf.expand_dims(tf.one_hot(indices=self.heads, depth=num_entity), 1),
+                            tf.expand_dims(tf.one_hot(indices=self.tails, depth=num_entity), 1)]
+        
+        # The probability we choose different cases: [tqs, tqe] X [(last_ts, last_te), (first_ts, first_te), (last_event, first_event)]
+        self.attn_refType_embed = [tf.Variable(self._random_uniform_unit(self.num_query, 2), dtype=tf.float32) for _ in range(3*(int(self.flag_int)+1))] 
+
+        if self.flag_state_vec_enhance:
+            # Todo: check the code.
             self.query_rels = tf.placeholder(tf.int32, [None])    # dummy batch
             self.refNode_source = tf.placeholder(tf.float32, [None, None])  # show where the refNode comes from
             self.res_random_walk = tf.placeholder(tf.float32, [None, self.num_rule])   # dummy batch
@@ -200,109 +209,154 @@ class Learner(object):
         return 
 
 
-    def _build_graph(self):
+    def _build_comp_graph(self):
         '''
         Define forward process. Use both RNN and shallow layers.
+        Please look at the Neural-LP paper (Yang, 2017) for more details and explanations.
 
         '''
         self._build_variables()
         
-        # [tqs, tqe] * [(last_ts, last_te), (first_ts, first_te), (first_event, last_event)]
+        # [tqs, tqe] * [(last_ts, last_te), (first_ts, first_te), (last_event, first_event)]
         attn_refType = [tf.nn.embedding_lookup(embed, self.query_rels) for embed in self.attn_refType_embed]
         attn_refType = [tf.nn.softmax(x, axis=1) for x in attn_refType]
 
-        if self.flag_state_vec_enhan:
+        if self.flag_state_vec_enhance:
             attn_rule = tf.nn.embedding_lookup(self.attn_rule_embed, self.query_rels)
             attn_rule = tf.nn.softmax(attn_rule, axis=1)
             refNode_probs = tf.reduce_sum(self.res_random_walk * attn_rule, axis=1, keep_dims=True)
             state_vec_est = tf.matmul(self.refNode_source, refNode_probs)
 
         
-        self.state_vector = []
+        self.state_vec_recorded = [] # Record the final state vector for both tqs and tqe since they share it.
         self.pred = []
-        for i in range(2):
-            # [last/first event]
+        for idx_event_pos in range(2):
+            # Use last or first event on the path to predict the query time.
+            # For last event it is the end node of our random walk, and for first event it is the end node of our inverse random walk.
+            state_start_pos = self.rnn_state_size*idx_event_pos
             for t in range(self.num_step):
-                self.attn_memories[i].append(tf.nn.softmax(tf.squeeze(tf.matmul(
-                                            tf.expand_dims(self.rnn_outputs[t][:, self.rnn_state_size*i:self.rnn_state_size*(i+1)], 1), 
-                                            tf.stack([rnn_output[:, self.rnn_state_size*i:self.rnn_state_size*(i+1)] 
-                                                    for rnn_output in self.rnn_outputs[0:t+1]], axis=2)), 
-                                                    squeeze_dims=[1])))
-                
+                # Each time we start from a state vector which is a weight sum of all the previous state vectors.
+                # self.rnn_outputs[t] is current state vector (shape: (batch_size, rnn_state_size*2))
+                # the first half is used for last event, and the second half is used for first event
+                self.attn_memories_ls[idx_event_pos].append(tf.nn.softmax(tf.squeeze(tf.matmul(
+                                                            tf.expand_dims(self.rnn_outputs[t][:, state_start_pos:state_start_pos + self.rnn_state_size], 1), 
+                                                            tf.stack([rnn_output[:, state_start_pos:state_start_pos + self.rnn_state_size] 
+                                                                        for rnn_output in self.rnn_outputs[0:t+1]], axis=2)), 
+                                                                        squeeze_dims=[1])))
+                # (batch_size, num_nodes)
                 memory_read = tf.squeeze(
                                 tf.matmul(
-                                    tf.expand_dims(self.attn_memories[i][t], 1), 
-                                    self.memories[i]),
-                                squeeze_dims=[1])
+                                    tf.expand_dims(self.attn_memories_ls[idx_event_pos][t], 1), 
+                                    self.memories_ls[idx_event_pos]), squeeze_dims=[1])
                 
+
                 if  t < self.num_step - 1:   
+                    # We first consider the selection of different temporal relations (TR).
                     memory_read = tf.transpose(memory_read)
                     if t == 0:
-                        # for t == 0, TR is fixed as ukn
-                        memory_read = tf.sparse_tensor_dense_matmul(self.connectivity[0], memory_read)   # todo: define connectivity matrixs {0: ukn, 1: bf, 2: t, 3: af} for edges
+                        # for t = 0, TR is fixed as ukn since we don't know the query time.
+                        # self.connectivity_TR[0] if for the TR of ukn.
+                        memory_read = tf.sparse_tensor_dense_matmul(self.connectivity_TR[0], memory_read)
+                        memory_read = tf.transpose(memory_read)
                     else:
                         database_results = []
-                        for TR in range(self.num_TR):   
-                            # TR: [0: ukn, 1: bf, 2: t, 3: af]
-                            product = tf.sparse_tensor_dense_matmul(self.connectivity[TR], memory_read)
-                            database_results.append(tf.transpose(product) * self.attn_TR[i][t][TR])
+                        for idx_TR in range(self.num_TR):   
+                            # We have different choices: TR: [0: ukn, 1: bf, 2: t, 3: af]
+                            product = tf.sparse_tensor_dense_matmul(self.connectivity_TR[idx_TR], memory_read)
+                            database_results.append(tf.transpose(product) * self.attn_TR[idx_event_pos][t][idx_TR])
 
                         added_database_results = tf.add_n(database_results)
                         if self.norm:
                             added_database_results /= tf.maximum(self.thr, tf.reduce_sum(added_database_results, axis=1, keep_dims=True))
                         memory_read = tf.identity(added_database_results)
-                        memory_read = tf.transpose(memory_read)
 
+                    # We then consider the selection of different relations (predicates).    
+                    memory_read = tf.transpose(memory_read)
                     database_results = []
-                    for r in range(self.num_operator):  # now database is a diagonal matrix which shows the relation of matrix
-                        product = tf.sparse_tensor_dense_matmul(self.database[r], memory_read)  # todo: check the shape of memory_read, whether it is the same
-                        database_results.append(tf.transpose(product) * self.attn_rel[i][t][r])
+                    for idx_rel in range(self.num_relation):  # now connectivity_rel is a diagonal matrix which shows the predicate of nodes
+                        product = tf.sparse_tensor_dense_matmul(self.connectivity_rel[idx_rel], memory_read)
+                        database_results.append(tf.transpose(product) * self.attn_rel[idx_event_pos][t][idx_rel])
 
                     added_database_results = tf.add_n(database_results)
                     if self.norm:
                         added_database_results /= tf.maximum(self.thr, tf.reduce_sum(added_database_results, axis=1, keep_dims=True))
+                    
+                    # As the end of each step, we apply dropout (if choosen) and add the current memory to the memory list.
                     if self.dropout > 0.:
                         added_database_results = tf.nn.dropout(added_database_results, keep_prob=1.-self.dropout)
-
-                    self.memories[i] = tf.concat( 
-                                        [self.memories[i], 
-                                        tf.expand_dims(added_database_results, 1)],
-                                        axis=1)
+                    
+                    self.memories_ls[idx_event_pos] = tf.concat( 
+                                                            [self.memories_ls[idx_event_pos], 
+                                                            tf.expand_dims(added_database_results, 1)],
+                                                            axis=1)
                 else:
-                    if self.flag_state_vec_enhan:
+                    # For the last step, we use the state vector (memory_read) to predict the query time.
+                    if self.flag_state_vec_enhance:
                         memory_read[self.refNode_index] = 0.5 * memory_read[self.refNode_index] + 0.5 * state_vec_est   # todo: distinguish first and last events
 
-                    self.state_vector.append(tf.identity(memory_read))
+                    self.state_vec_recorded.append(tf.identity(memory_read))
 
-                    memory_read = memory_read * (attn_refType[i][:, 0:1] * self.probs[:, 2*i, :] + \
-                                                 attn_refType[i][:, 1:2] * self.probs[:, 2*i+1, :])
+                    # The state vector is about the probability we arrive at different reference nodes. 
+                    # Given each reference node, we can calculate a probability for the query time.
+                    # shape change: (batch_size, num_nodes, 1) * (batch_size, num_nodes, num_timestamp) -> (batch_size, num_nodes, num_timestamp)
+                    # For training, since we know the target timestamp, we can simply the calculatation as:
+                    # shape change: (batch_size, num_nodes) * (batch_size, num_nodes) -> (batch_size, num_nodes)
+                    memory_read *= attn_refType[idx_event_pos][:, 0:1] * self.probs[:, 2*idx_event_pos, :] + \
+                                   attn_refType[idx_event_pos][:, 1:2] * self.probs[:, 2*idx_event_pos+1, :]
+                    
+                    # We require the path to be cyclic. And the last TR is ukn since we don't know the query time.
                     memory_read = tf.transpose(memory_read)
-                    memory_read = tf.sparse_tensor_dense_matmul(self.connectivity[0], memory_read)
+                    memory_read = tf.sparse_tensor_dense_matmul(self.connectivity_TR[0], memory_read)
                     memory_read = tf.transpose(memory_read)
-                    if i % 2 == 0:
+                    
+                    # For last event, we start from head entity and should come back to the head entity.
+                    # For first event, we start from tail entity and should come back to the tail entity.
+                    if idx_event_pos % 2 == 0:
                         self.pred.append(tf.reduce_sum(self.targets_h * memory_read, axis=1, keep_dims=True))
                     else:
                         self.pred.append(tf.reduce_sum(self.targets_t * memory_read, axis=1, keep_dims=True))
 
         self.attn_refType = attn_refType
+        
+        # We merge the results from last and first events to get the final prediction.
         self.final_pred = [attn_refType[2][:, 0:1] * self.pred[0] + attn_refType[2][:, 1:2] * self.pred[1]]
+
+        # scaling the loss to make the learning more stable.
+        if self.flag_loss_scaling_factor is not None:
+            self.final_pred[0] /= self.flag_loss_scaling_factor
+
         self.final_loss = - tf.reduce_sum(tf.log(tf.maximum(self.final_pred[0], self.thr)), 1)
 
-        if self.flag_interval:
-            for i in range(2):
-                # [last/first event]
-                memory_read = tf.identity(self.state_vector[0]) # use the same state vector for both tqs and tqe
-                memory_read = memory_read * (attn_refType[3+i][:, 0:1] * self.probs[:, 2*i+4, :] + \
-                                             attn_refType[3+i][:, 1:2] * self.probs[:, 2*i+5, :])
+
+        if self.flag_int:
+            for idx_event_pos in range(2):
+                # Use the same final state vector for both tqs and tqe.
+                memory_read = tf.identity(self.state_vec_recorded[idx_event_pos]) 
+                
+                # The state vector is about the probability we arrive at different reference nodes. 
+                # Given each reference node, we can calculate a probability for the query time.
+                memory_read *= attn_refType[3+idx_event_pos][:, 0:1] * self.probs[:, 2*idx_event_pos+4, :] + \
+                               attn_refType[3+idx_event_pos][:, 1:2] * self.probs[:, 2*idx_event_pos+5, :]
+                
+                # We require the path to be cyclic. And the last TR is ukn since we don't know the query time.
                 memory_read = tf.transpose(memory_read)
-                memory_read = tf.sparse_tensor_dense_matmul(self.connectivity[0], memory_read)
+                memory_read = tf.sparse_tensor_dense_matmul(self.connectivity_TR[0], memory_read)
                 memory_read = tf.transpose(memory_read)
-                if i % 2 == 0:
+
+                # For last event, we start from head entity and should come back to the head entity.
+                # For first event, we start from tail entity and should come back to the tail entity.
+                if idx_event_pos % 2 == 0:
                     self.pred.append(tf.reduce_sum(self.targets_h * memory_read, axis=1, keep_dims=True))
                 else:
                     self.pred.append(tf.reduce_sum(self.targets_t * memory_read, axis=1, keep_dims=True))
             
+            # We merge the results from last and first events to get the final prediction.
             self.final_pred.append(attn_refType[5][:, 0:1] * self.pred[2] + attn_refType[5][:, 1:2] * self.pred[3])
+           
+            # scaling the loss to make the learning more stable.
+            if self.flag_loss_scaling_factor is not None:
+                self.final_pred[1] /= self.flag_loss_scaling_factor
+
             self.final_loss += - tf.reduce_sum(tf.log(tf.maximum(self.final_pred[1], self.thr)), 1)
 
         self.optimizer = tf.train.AdamOptimizer()
@@ -312,7 +366,7 @@ class Learner(object):
         self.optimizer_step = self.optimizer.apply_gradients(gvs)
 
 
-    def _build_graph_acc_ver(self):
+    def _build_comp_graph_fast_ver(self):
         '''
         Use shallow layers only to accelerate the training process.
         '''
@@ -321,7 +375,6 @@ class Learner(object):
         
         # Todo: ruleLen_split_ver
         if self.flag_ruleLen_split:
-            print('Todo: ruleLen_split_ver')
             pass
         else:
             num_cases = 8 if self.flag_int else 2   # [tqs, tqe] X [last_event, first_event] X [ts, te]
@@ -381,35 +434,33 @@ class Learner(object):
         self.optimizer_step = self.optimizer.apply_gradients(gvs)
 
 
-
-    def _run_graph(self, sess, qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, mode, to_fetch):
+    def _run_comp_graph(self, sess, qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, mode, to_fetch):
         qq = [qq[idx] for idx in valid_sample_idx]
         hh = [hh[idx] for idx in valid_sample_idx]
         tt = [tt[idx] for idx in valid_sample_idx]
 
+        # Create feed dict.
         feed = {}
-
         feed[self.queries] = [[q] * (self.num_step-1) + [self.num_query] for q in qq]
         feed[self.heads] = hh 
         feed[self.tails] = tt 
         feed[self.query_rels] = qq
-
         feed[self.probs] = [probs[idx] for idx in valid_sample_idx]
 
         if mode == 'Test':
-            feed[self.probs] = [self.create_dummy_probs_for_prediction(probs[idx]) for idx in valid_sample_idx]
+            feed[self.probs] = [self._create_dummy_probs_for_prediction(probs[idx]) for idx in valid_sample_idx]
 
-        for r in range(self.num_operator):
-            feed[self.database[r]] = tf.SparseTensorValue(*mdb[r])
-        for TR in range(self.num_TR):
-            feed[self.connectivity[TR]] = tf.SparseTensorValue(*connectivity[TR])
+        for idx_rel in range(self.num_relation):
+            feed[self.connectivity_rel[idx_rel]] = tf.SparseTensorValue(*connectivity_rel[idx_rel])
+        for idx_TR in range(self.num_TR):
+            feed[self.connectivity_TR[idx_TR]] = tf.SparseTensorValue(*connectivity_TR[idx_TR])
 
         fetches = to_fetch
         graph_output = sess.run(fetches, feed)
         return graph_output
 
 
-    def _run_graph_acc(self, sess, query_rels, refNode_source, res_random_walk, to_fetch):
+    def _run_comp_graph_fast_ver(self, sess, query_rels, refNode_source, res_random_walk, to_fetch):
         feed = {}
         feed[self.query_rels] = query_rels
         feed[self.refNode_source] = refNode_source
@@ -431,41 +482,39 @@ class Learner(object):
         return graph_output
 
 
-    def process_probs_for_prediction(self, probs):
+    def _process_probs_for_prediction(self, probs, num_entity):
         probs = np.array(probs)
         probs = np.transpose(probs, (0, 2, 1))
-        probs = probs.reshape(-1, self.num_entity)
+        probs = probs.reshape(-1, num_entity)
         return probs.tolist()
 
 
-    def create_dummy_probs_for_prediction(self, probs):
+    def _create_dummy_probs_for_prediction(self, probs):
         return [prob[0] for prob in probs]
-
 
 
     def update(self, sess, inputs):
         if self.flag_acceleration:
             qq, refNode_source, res_random_walk, probs = inputs 
             to_fetch = [self.final_loss, self.optimizer_step]
-            fetched = self._run_graph_acc(sess, qq, refNode_source, res_random_walk, probs, to_fetch)
+            fetched = self._run_comp_graph_fast_ver(sess, qq, refNode_source, res_random_walk, probs, to_fetch)
         else:
             qq, hh, tt, mdb, connectivity, probs, valid_sample_idx = inputs
             to_fetch = [self.final_loss, self.optimizer_step]
-            fetched = self._run_graph(sess, qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, 'Train', to_fetch)
+            fetched = self._run_comp_graph(sess, qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, 'Train', to_fetch)
         return fetched[0]
-
 
 
     def predict(self, sess, inputs):
         if self.flag_acceleration:
             qq, refNode_source, res_random_walk, probs = inputs
             to_fetch = [self.pred]
-            fetched = self._run_graph_acc(sess, qq, refNode_source, res_random_walk, probs, to_fetch)
+            fetched = self._run_comp_graph_fast_ver(sess, qq, refNode_source, res_random_walk, probs, to_fetch)
             return fetched[0]
         else:
             qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, valid_ref_event_idx = inputs
             to_fetch = [self.state_vector, self.attn_refType]
-            fetched = self._run_graph(sess, qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, 'Test', to_fetch)
+            fetched = self._run_comp_graph(sess, qq, hh, tt, mdb, connectivity, probs, valid_sample_idx, 'Test', to_fetch)
 
             # [tqs, tqe] X [last_event, first_event]
             state_vector = []
@@ -489,8 +538,7 @@ class Learner(object):
             return pred
 
 
-
-    def get_rule_scores_acc(self, sess):
+    def get_rule_scores_fast_ver(self, sess):
         to_fetch = [self.attn_rule, self.attn_refType]
 
         qq = list(range(self.num_query))
@@ -504,6 +552,6 @@ class Learner(object):
             probs += [[[0]]*self.num_timestamp] * 4
         probs = np.array(probs).transpose(1, 0, 2)
 
-        fetched = self._run_graph_acc(sess, qq, refNode_source, res_random_walk, probs, to_fetch)
+        fetched = self._run_comp_graph_fast_ver(sess, qq, refNode_source, res_random_walk, probs, to_fetch)
 
         return fetched[0], fetched[1]

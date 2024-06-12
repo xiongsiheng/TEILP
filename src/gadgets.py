@@ -20,15 +20,35 @@ class Data_preprocessor():
         
         data['dataset'] = ['WIKIDATA12k', 'YAGO11k', 'icews14', 'icews05-15', 'gdelt100'][dataset_index]
         if option.shift:
-            data['dataset'] = 'difficult_settings/' + data['dataset'] + '_time_shifting'
+            data['dataset'] = 'difficult_settings/{}_time_shifting'.format(data['dataset'])
 
         data['dataset_name'] = ['wiki', 'YAGO', 'icews14', 'icews05-15', 'gdelt100'][dataset_index]
 
         data['num_rel'] = [48, 20, 460, 502, 40][dataset_index]
-        data['num_entity'] = [40000, 40000, 40000, 40000, 40000][dataset_index]
         data['num_TR'] = 4
+
+        # Note that entity in TEKG is event in TKG.
+        # Originally we use 40000 as num_entity for global graph which is time-consuming.
+        # Now we use dynamic value for local graph.
+        # data['num_entity'] = [40000, 40000, 40000, 40000, 40000][dataset_index]
          
         return dataset_index
+    
+
+    def _trainig_data_sampling(self, train_edges, num_rel, num_sample_per_rel=-1):
+        pos_examples_idx = np.array(list(range(len(train_edges))))
+        if num_sample_per_rel > 0:
+            pos_examples_idx_sample = []
+            for rel_idx in range(num_rel):
+                cur_pos_examples_idx = pos_examples_idx[train_edges[:, 1] == rel_idx]
+                np.random.shuffle(cur_pos_examples_idx)
+                pos_examples_idx_sample.append(cur_pos_examples_idx[:num_sample_per_rel])
+
+            pos_examples_idx_sample = np.hstack(pos_examples_idx_sample)
+            pos_examples_idx = pos_examples_idx_sample
+
+        pos_examples_idx = pos_examples_idx.tolist()
+        return pos_examples_idx
 
 
     def _prepare_edges(self, data, option, dataset_index):
@@ -50,20 +70,21 @@ class Data_preprocessor():
 
             data['num_samples_dist'] = [16000, 2000, 2000]
 
-        data['train_idx_ls'] = list(range(data['num_samples_dist'][0]))
+        data['train_idx_ls'] = self._trainig_data_sampling(data['train_edges'], data['num_rel'], num_sample_per_rel=option.num_samples_per_rel)
         data['valid_idx_ls'] = list(range(data['num_samples_dist'][0], data['num_samples_dist'][0] + data['num_samples_dist'][1]))
         data['test_idx_ls'] = list(range(data['num_samples_dist'][0] + data['num_samples_dist'][1], np.sum(data['num_samples_dist'])))
 
+        
         if option.shift:
             data['train_idx_ls'] = [idx + np.sum(data['num_samples_dist']) for idx in data['train_idx_ls']]
             data['valid_idx_ls'] = [idx + np.sum(data['num_samples_dist']) for idx in data['valid_idx_ls']]
             data['test_idx_ls'] = [idx + np.sum(data['num_samples_dist']) for idx in data['test_idx_ls']]
 
         if option.dataset in ['wiki', 'YAGO']:
-            with open('../data/'+ data['dataset_name'] +'_time_pred_eval_rm_idx.json', 'r') as file:
+            with open('../data/{}_time_pred_eval_rm_idx.json'.format(data['dataset_name']), 'r') as file:
                 data['rm_ls'] = json.load(file)
             if option.shift:
-                with open('../data/'+ data['dataset_name'] +'_time_pred_eval_rm_idx_shift_mode.json', 'r') as file:
+                with open('../data/{}_time_pred_eval_rm_idx_shift_mode.json'.format(data['dataset_name']), 'r') as file:
                     data['rm_ls'] = json.load(file)
 
         # remove test samples with unknown time      
@@ -79,11 +100,11 @@ class Data_preprocessor():
         data['rel_ls_no_dur'] = [[4, 16, 17, 20], [0, 7], None, None, None][dataset_index]
 
         # We do not create the whole graph in advance which is time-consuming.
-        data['mdb'], data['connectivity'], data['TEKG_nodes'] = None, None, None
+        data['connectivity_rel'], data['connectivity_TR'], data['TEKG_nodes'] = None, None, None
 
         # Todo: use the duration information for learning
         if hasattr(option, 'flag_use_dur') and option.flag_use_dur:
-            with open("../output/"+ data['dataset_name'] + "_dur_preds.json", "r") as json_file:
+            with open("../output/{}_dur_preds.json".format(data['dataset_name']), "r") as json_file:
                 data['pred_dur'] = json.load(json_file)
 
 
@@ -94,7 +115,7 @@ class Data_preprocessor():
         self._prepare_stat_res(data, option, dataset_index)
 
         if save_option:
-            option.this_expsdir = os.path.join(option.exps_dir, data['dataset_name'] + '_' + option.tag)
+            option.this_expsdir = os.path.join(option.exps_dir, '{}_{}'.format(data['dataset_name'], option.tag))
             if not os.path.exists(option.this_expsdir):
                 os.makedirs(option.this_expsdir)
             option.ckpt_dir = os.path.join(option.this_expsdir, "ckpt")
@@ -106,7 +127,7 @@ class Data_preprocessor():
             option.num_rule = [1000, 1000, 1000, 1000, 1000][dataset_index]  # for each relation
             option.flag_interval = True if dataset_index in [0, 1] else False
 
-            option.savetxt = option.this_expsdir + '/intermediate_res.txt'
+            option.savetxt = '{}/intermediate_res.txt'.format(option.this_expsdir)
             option.save()
             print("Option saved.")
 
@@ -122,7 +143,7 @@ class Data_preprocessor():
 
 
     def obtain_all_data(self, dataset, shuffle_train_set=True, flag_use_valid=1):
-        edges1 = read_dataset_txt('../data/'+ dataset +'/train.txt')
+        edges1 = read_dataset_txt('../data/{}/train.txt'.format(dataset))
         edges1 = np.array(edges1)
 
         if shuffle_train_set:
@@ -130,10 +151,10 @@ class Data_preprocessor():
 
         edges2 = None
         if flag_use_valid:
-            edges2 = read_dataset_txt('../data/'+ dataset +'/valid.txt')
+            edges2 = read_dataset_txt('../data/{}/valid.txt'.format(dataset))
             edges2 = np.array(edges2)
 
-        edges3 = read_dataset_txt('../data/'+ dataset +'/test.txt')
+        edges3 = read_dataset_txt('../data/{}/test.txt'.format(dataset))
         edges3 = np.array(edges3)
 
         return edges1, edges2, edges3
@@ -146,16 +167,15 @@ class Data_preprocessor():
             pattern_ls[rel], ts_stat_ls[rel], te_stat_ls[rel], stat_res[rel] = [], [], [], []
 
             # read results
-            path = '../output/' + dataset + path_suffix[:-1] + '/' + dataset + path_suffix + "stat_res_rel_" + str(rel) + '.json'
+            path = '../output/{}{}/{}{}stat_res_rel_{}.json'.format(dataset, path_suffix[:-1], dataset, path_suffix, rel)
             if not os.path.exists(path):
-                print(path)
                 continue
             with open(path, "r") as f:
                 res = json.load(f)
 
             if dataset in ['icews14', 'icews05-15', 'gdelt100']:
                 stat_res[rel] = res
-                pattern_path = '../output/'+ dataset + path_suffix[:-1] + '/' + dataset + path_suffix + 'pattern_ls_rel_'+ rel +'.json'
+                pattern_path = '../output/{}{}/{}{}pattern_ls_rel_{}.json'.format(dataset, path_suffix[:-1], dataset, path_suffix, rel)
                 if os.path.exists(pattern_path):
                     with open(pattern_path, "r") as f:
                         pattern_ls[rel] = json.load(f)
@@ -171,7 +191,6 @@ class Data_preprocessor():
                 # res: time_gap_ts_ref_ts + time_gap_ts_ref_te + time_gap_te_ref_ts + time_gap_te_ref_te
                 # cur_ts_stat_ls: 'ts_first_event_ts', 'ts_first_event_te', 'ts_last_event_ts', 'ts_last_event_te'
                 # cur_te_stat_ls: 'te_first_event_ts', 'te_first_event_te', 'te_last_event_ts', 'te_last_event_te'
-
                 for k in res[rule]:
                     res[rule][k] = np.array(res[rule][k])
 
@@ -194,7 +213,7 @@ class Data_preprocessor():
         if flag_interval:
             e.append(walk['te'][0])
         
-        rule_pattern = ' '.join([str(cur_rel) for cur_rel in walk["relations"][1:]]) + ' ' + TR_ls
+        rule_pattern = '{} {}'.format(' '.join([str(cur_rel) for cur_rel in walk["relations"][1:]]), TR_ls)
         cur_ref_edge = [[walk['entities'][1], walk["relations"][1], walk['entities'][2], walk['ts'][1]], 
                         [walk['entities'][-2], walk["relations"][-1], walk['entities'][-1], walk['ts'][-1]]]
 
@@ -221,7 +240,7 @@ class Data_preprocessor():
         if data1 is None:
             data = {}
             for file_path in file_paths:
-                if not '_rel_' + str(rel) in file_path:
+                if not '_rel_{}'.format(str(rel)) in file_path:
                     continue
                 with open(file_path) as f:
                     data.update(json.load(f))
@@ -241,15 +260,15 @@ class Data_preprocessor():
 
         if flag_plot:
             for rule_length in [1,2,3,4,5]:
-                plot_freq_hist(res[:, 0], 10, 'fig/len' + str(rule_length) + '/' + '_'.join([str(rel), rule_pattern, 'ts']))
-                plot_freq_hist(res[:, 1], 10, 'fig/len' + str(rule_length) + '/' + '_'.join([str(rel), rule_pattern, 'te']))
+                plot_freq_hist(res[:, 0], 10, 'fig/len{}/{}'.format(str(rule_length), '_'.join([rule_pattern, 'ts'])))
+                plot_freq_hist(res[:, 1], 10, 'fig/len{}/{}'.format(str(rule_length), '_'.join([rule_pattern, 'te'])))
 
 
     def read_random_walk_results(self, dataset, rel_ls, file_paths, file_suffix, data1=None, flag_interval=True, flag_plot=False, mode=None, flag_time_shifting=False):
-        output_dir = '../output/' + dataset + '/' if not flag_time_shifting else '../output/' + dataset + '_time_shifting/'
+        output_dir = '../output/{}/'.format(dataset) if not flag_time_shifting else '../output/{}_time_shifting/'.format(dataset)
         if not os.path.exists(output_dir):
             os.mkdir(output_dir)
-            os.mkdir(output_dir + 'samples')
+            os.mkdir('{}samples'.format(output_dir))
 
         for rel in rel_ls:
             samples_edges, stat_res = {}, {}
@@ -268,12 +287,12 @@ class Data_preprocessor():
             if mode == 'Train':
                 for rule_pattern in stat_res:
                     self._format_stat_res(stat_res, rule_pattern, flag_plot)
-
-                with open(output_dir +  dataset + file_suffix + 'stat_res_rel_' + str(rel) + '_' + mode +'.json', 'w') as f:
+     
+                with open('{}{}{}stat_res_rel_{}_.json'.format(output_dir, dataset, file_suffix, rel, mode), 'w') as f:
                     json.dump(stat_res, f)
 
                 for e in samples_edges:
-                    with open(output_dir + 'samples/' + dataset + file_suffix +  mode + '_sample_' + str(e) + ".json", "w") as f:
+                    with open("{}samples/{}{}{}_sample_{}.json".format(output_dir, dataset, file_suffix, mode, e), "w") as f:
                         json.dump(convert_dict({e: samples_edges[e]}), f)
 
                 rule_nums = rule_num_stat(samples_edges)
@@ -284,7 +303,7 @@ class Data_preprocessor():
                     pattern_ls = sorted(rule_nums[rel], key=lambda p: rule_nums[rel][p], reverse=True)[:1000]
                     random.shuffle(pattern_ls)
 
-                with open(output_dir + dataset + file_suffix + "pattern_ls_rel_" + str(rel) + ".json", 'w') as file:
+                with open("{}{}{}pattern_ls_rel_{}.json".format(output_dir, dataset, file_suffix, rel), 'w') as file:
                     json.dump(pattern_ls, file)
 
         return
@@ -326,10 +345,9 @@ class Data_preprocessor():
         if len(cur_probs[np.isnan(cur_probs)])>0 or len(cur_probs[np.isinf(cur_probs)])>0 or sum(cur_probs) == 0:
             return False, []
 
-        # if probs_normalization:
-        #     cur_probs /= gaussian_pdf(Gau_mean, Gau_mean, Gau_std)
-
-        cur_probs /= np.sum(cur_probs)
+        if probs_normalization:
+            cur_probs /= np.sum(cur_probs)
+        
         cur_probs = np.around(cur_probs, decimals=6)
 
         if mode == 'Train':
@@ -750,7 +768,7 @@ class Data_preprocessor():
         timestamp_range = data['timestamp_range']
 
         num_rel = data['num_rel']
-        num_entity = data['num_entity']
+        # num_entity = data['num_entity']
 
         pattern_ls = data['pattern_ls']
         ts_stat_ls = data['ts_stat_ls']
