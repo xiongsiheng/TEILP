@@ -219,9 +219,9 @@ class Experiment():
                                          global_step=self.epoch)
             print("Model saved at %s" % model_path)
 
-            if self.early_stop():
-                self.early_stopped = True
-                print("Early stopped at epoch %d" % (self.epoch))
+            # if self.early_stop():
+            #     self.early_stopped = True
+            #     print("Early stopped at epoch %d" % (self.epoch))
 
 
     def test(self, total_idx=None):
