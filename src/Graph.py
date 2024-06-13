@@ -861,7 +861,6 @@ class TEKG(Base):
             # Instead we use the batch graph for each batch.
             flag_use_batch_graph = True
         
-        idx_ls = [91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
 
         query_nodes, input_intervals, batch_nodes, batch_nodes_idx, num_entity = self._process_saved_data(idx_ls, flag_use_batch_graph)
         

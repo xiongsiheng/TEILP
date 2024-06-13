@@ -52,12 +52,10 @@ class Experiment():
             # all samples are invalid (no walk can be found)
             return [], [], []
 
-        if mode == "Train":
-            print(batch_idx_ls)            
+        if mode == "Train":           
             inputs = [query_rels, refNode_source, res_random_walk] if self.option.flag_acceleration else \
                      [qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, inputs_for_enhancement]
             output = run_fn(self.sess, inputs)
-            print(output)
             preds, gts = [], []
         else:
             output = final_preds  # [(bacth_size, num_timestamp)] * (1 + int(flag_int))
