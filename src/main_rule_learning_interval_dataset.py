@@ -50,8 +50,9 @@ def main():
     option = Option(d)
     option.tag = time.strftime("%y-%m-%d-%H-%M")
     option.exps_dir = '../exps/'
-    option.seed = 33
     
+    # Setting for the model. No need to change.
+    option.seed = 33
     option.num_layer = 1
     option.rnn_state_size = 128
     option.query_embed_size = 128
@@ -62,11 +63,23 @@ def main():
     option.min_epoch = 5
     option.create_log = False
 
-    option.different_states_for_rel_and_TR = False
-    option.flag_acceleration = True   # only shallow layers are used
+    option.different_states_for_rel_and_TR = False  # Let rel and TR share the same states.
+    
+    # We consider only using the shallow layers to accelerate the training.
+    # Set flag_acceleration to False to use the RNN structure.
+    option.flag_acceleration = True
+    
+    # Use different scores for different lengths of rules. Found not necessary.
     option.flag_ruleLen_split_ver = False
+
+    # Use the duration information. Found not necessary.
     option.flag_use_dur = False
-    option.flag_state_vec_enhancement = False
+
+    # We enhance the RNN structure by adding the shallow layers.
+    option.flag_state_vec_enhancement = True # Todo: fix issues
+    
+    # If an event satisfies multiple rules, choose the max or mean probability during training.
+    # During inference, we always choose the mean probability since we don't have the prior.
     option.prob_type_for_training = ['max', 'mean'][0]
     
     # If we use both RNN and shallow layers, it is better to sample the training data for efficiency.
@@ -75,10 +88,11 @@ def main():
     os.environ["CUDA_VISIBLE_DEVICES"] = option.gpu
     tf.logging.set_verbosity(tf.logging.ERROR)
 
-    processor = Data_preprocessor()
+    
     # For the first time, set process_walk_res=True to generate the walk results.
     # After that, set it to False to load the walk results directly.
     # Once we change the setting, we need to re-generate the walk results.
+    processor = Data_preprocessor()
     data = processor.prepare_data(option, process_walk_res=True)
 
 
@@ -110,6 +124,7 @@ def main():
         
             experiment.close_log_file()
     else:
+        # For testing, we don't load the model. Instead, we use an online strategy to accelerate the inference.
         experiment = Experiment(None, None, option, None, data)
         print("Experiment created.")
 

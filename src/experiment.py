@@ -41,23 +41,23 @@ class Experiment():
         Calculate the output of the model for a batch of data.
         '''
         if self.option.flag_acceleration:
-            # Shape: qq: [] * dummy_batch_size (num_events);  refNode_source: [(dummy_batch_size,)] * batch_size;
+            # Shape: query_rels: [] * dummy_batch_size (num_events);  refNode_source: [(dummy_batch_size,)] * batch_size;
             #        res_random_walk: (num_rules_in_total_for_different_events, 2); [event_idx, rule_idx]
             #        probs: [[(num_timestamp, )] * dummy_batch_size ] * 8
-            qq, query_rels, refNode_source, res_random_walk, valid_sample_idx, input_intervals, input_samples, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode)
+            qq, query_rels, refNode_source, res_random_walk, refEdges, valid_sample_idx, input_intervals, input_samples, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode)
         else:
-            qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, valid_ref_event_idx, input_intervals, input_samples, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode)
-
+            qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, inputs_for_enhancement, input_intervals, input_samples, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode)
 
         if len(valid_sample_idx) == 0:
             # all samples are invalid (no walk can be found)
             return [], [], []
 
-
-        if mode == "Train":            
+        if mode == "Train":
+            print(batch_idx_ls)            
             inputs = [query_rels, refNode_source, res_random_walk] if self.option.flag_acceleration else \
-                     [qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx]
+                     [qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, inputs_for_enhancement]
             output = run_fn(self.sess, inputs)
+            print(output)
             preds, gts = [], []
         else:
             output = final_preds  # [(bacth_size, num_timestamp)] * (1 + int(flag_int))
@@ -184,7 +184,7 @@ class Experiment():
             # Randomly sample the training data if the option is choosen.
             processor = Data_preprocessor()
             total_idx = processor._trainig_data_sampling(self.data['train_edges'], self.data['num_rel'], num_sample_per_rel=self.option.num_samples_per_rel)
-        
+
         loss = self.one_epoch("Train", total_idx=total_idx, batch_size=batch_size)
         self.train_stats.append([loss])
 

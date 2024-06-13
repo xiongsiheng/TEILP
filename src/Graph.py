@@ -188,7 +188,7 @@ class TEKG_int_fast_ver(Base):
 
 
     def _update_outputs(self, refNode_probs, refNode_rule_idx, query_relations, idx, valid_sample_idxs, 
-                                  refNode_sources, valid_query_relations, rule_idx, mode, preds):
+                                  refNode_sources, query_rel_dummy, rule_idx, refEdges, mode, preds):
         '''
         Updates the output structures with processed data from refNode_probs and refNode_rule_idx
         '''
@@ -216,22 +216,30 @@ class TEKG_int_fast_ver(Base):
             rule_idx_with_probs = []
             for idx_query_time in [0, 1]:
                 for idx_event_pos in [0, 1]:
+                    num_rules = 0
                     for idx_ref_time in [0, 1]:
                         probs = refNode_probs[edge][idx_event_pos][idx_query_time][idx_ref_time]
+                        num_rules += len(probs)
                         rule_idx_with_probs.append([[len(rule_idx), prob_dict[1], prob_dict[0]] for prob_dict in probs])  # [idx_event_in_batch, idx_rule, prob]
-                        
+
+                    # If there are rules for the current event_pos, we add the edge to refEdges.
+                    # We only consider it for tqs since we don't want to add the same edge multiple times.
+                    if idx_query_time == 0 and num_rules > 0:
+                        refEdges.append([edge, idx_event_pos])
+
             rule_idx.append(rule_idx_with_probs)  # [idx_event_in_batch, idx_rule, prob] * 4 * (1+flag_int)
 
         if num_valid_edge > 0:
+            # update these global variables.
             valid_sample_idxs.append(idx)
             refNode_sources.append(num_valid_edge)
-            valid_query_relations += [query_relations[idx]] * num_valid_edge
+            query_rel_dummy += [query_relations[idx]] * num_valid_edge
 
         return None
 
 
     def _process_graph(self, idx_ls, random_walk_res, mode, query_relations):
-        valid_sample_idxs, valid_query_relations, refNode_sources, valid_rule_idx = [], [], [], []
+        valid_sample_idxs, query_rel_dummy, refNode_sources, valid_rule_idx, refEdges = [], [], [], [], []
         merged_valid_rule_idx = []
         final_preds = [[] for _ in range(1+ int(self.option.flag_interval))]
         for idx, query_idx in enumerate(idx_ls):
@@ -246,7 +254,9 @@ class TEKG_int_fast_ver(Base):
                 continue
             
             preds = self._update_outputs(refNode_probs, refNode_rule_idx, query_relations, idx, 
-                                         valid_sample_idxs, refNode_sources, valid_query_relations, valid_rule_idx, mode, preds)
+                                         valid_sample_idxs, refNode_sources, query_rel_dummy, 
+                                         valid_rule_idx, refEdges,
+                                         mode, preds)
             if mode == 'Test':
                 for i in range(1+ int(self.option.flag_interval)):
                     final_preds[i].append(preds[i])
@@ -274,13 +284,13 @@ class TEKG_int_fast_ver(Base):
                 if len(final_preds[i]) > 0:
                     final_preds[i] = np.vstack(final_preds[i])
 
-        return valid_sample_idxs, valid_query_relations, refNode_sources, merged_valid_rule_idx, final_preds
+        return valid_sample_idxs, query_rel_dummy, refNode_sources, merged_valid_rule_idx, refEdges, final_preds
 
 
     def create_graph(self, idx_ls, mode):
         random_walk_res, input_intervals_dict = self._initialize_walk_res(idx_ls, mode)
         query_edges, query_intervals = self._load_queries(idx_ls)
-        query_relations = [query[1] for query in query_edges]
+        query_rel_ori = [query[1] for query in query_edges]
 
         if mode == 'Test':
             for i, data_idx in enumerate(idx_ls):
@@ -289,9 +299,9 @@ class TEKG_int_fast_ver(Base):
 
         # For interval-based datasets, we don't need to return the query samples.
         query_samples = None
-        valid_sample_idxs, valid_query_relations, refNode_sources, merged_valid_rule_idx, final_preds = self._process_graph(idx_ls, random_walk_res, mode, query_relations)
+        valid_sample_idxs, query_rel_dummy, refNode_sources, merged_valid_rule_idx, refEdges, final_preds = self._process_graph(idx_ls, random_walk_res, mode, query_rel_ori)
         
-        return query_relations, valid_query_relations, refNode_sources, merged_valid_rule_idx, valid_sample_idxs, query_intervals, query_samples, final_preds
+        return query_rel_ori, query_rel_dummy, refNode_sources, merged_valid_rule_idx, refEdges, valid_sample_idxs, query_intervals, query_samples, final_preds
 
 
 
@@ -615,27 +625,20 @@ class TEKG_timestamp_fast_ver(Base):
 
 
 class TEKG(Base):
-    def _build_connectivity_rel(self, nodes, num_entity, num_rel):
+    def _build_connectivity_rel(self, nodes, nodes_idx, num_entity, num_rel):
         """
         Build the connectivity_rel mat based on current nodes.
-        Nodes are not augmented with inverse nodes.
+        Nodes are augmented with inverse nodes.
         """
         connectivity_rel = {}
-        nodes_idx = np.arange(len(nodes))
-        for idx_rel in range(num_rel//2):
+        for idx_rel in range(num_rel):
             # Find all the nodes that satisfy the relation.
             idx_nodes_cur_rel = nodes_idx[nodes[:, 1] == idx_rel].reshape((-1, 1))
             if idx_nodes_cur_rel.size == 0:
-                connectivity_rel[idx_rel] = [[[0,0]], [0.0], [num_entity, num_entity]]
-                connectivity_rel[idx_rel + num_rel//2] = [[[0,0]], [0.0], [num_entity, num_entity]]
+                connectivity_rel[idx_rel] = [[[0,0]], [0.], [num_entity, num_entity]]
             else:
                 x, y = idx_nodes_cur_rel, idx_nodes_cur_rel
                 connectivity_rel[idx_rel] = [np.hstack([x, y]).tolist(), [1.0 for _ in range(len(idx_nodes_cur_rel))], [num_entity, num_entity]]
-                
-                # We infer the connectivity_rel for the inverse relation.
-                x, y = idx_nodes_cur_rel + num_entity//2, idx_nodes_cur_rel + num_entity//2
-                connectivity_rel[idx_rel + num_rel//2] = [np.hstack([x, y]).tolist(), [1.0 for _ in range(len(idx_nodes_cur_rel))], [num_entity, num_entity]]
-    
         return connectivity_rel
 
 
@@ -650,47 +653,39 @@ class TEKG(Base):
         return nodes_aug, nodes_idx_aug
 
 
-    def _build_connectivity_TR(self, nodes, num_entity, num_TR):
+    def _build_connectivity_TR(self, nodes, nodes_idx, num_entity, num_TR):
         """
         Build the connectivity_TR mat based on current nodes.
-        Nodes are not augmented with inverse nodes.
+        Nodes are augmented with inverse nodes.
         Different temporal relations (TRs) [0: ukn, 1: bf, 2: touch, 3: af]
         """
-        connectivity_TR = {key: [] for key in range(num_TR)}
-
-        # Create nodes_aug and nodes_idx_aug for combinations_TR.
-        nodes_aug, nodes_idx_aug = self._build_aug_nodes(nodes, num_entity)
-        
-        for entity in np.unique(np.hstack([nodes_aug[:, 0], nodes_aug[:, 2]])):
+        connectivity_TR = {key: [] for key in range(num_TR)}    
+        for entity in np.unique(np.hstack([nodes[:, 0], nodes[:, 2]])):
             # Find the node pairs that have the same entities as the subject and object.
-            b = nodes_idx_aug[nodes_aug[:, 2] == entity]
-            a = nodes_idx_aug[nodes_aug[:, 0] == entity]
+            # Direction: b -> a
+            b = nodes_idx[nodes[:, 2] == entity]
+            a = nodes_idx[nodes[:, 0] == entity]
             combinations = np.array(list(itertools.product(a, b)))
             
             # Calculate the TRs for the node pairs.
-            combinations_TR = combinations.copy()
-            combinations_TR[combinations_TR>=num_entity//2] -= num_entity//2
-            TRs = calculate_TR_mat_ver(nodes_aug[combinations_TR[:,0], 3:], nodes_aug[combinations_TR[:,1], 3:])
+            TRs = calculate_TR_mat_ver(nodes[combinations[:,0], 3:], nodes[combinations[:,1], 3:])
 
             # For different TRs, we store the corresponding node pairs with mask.
             for i in range(num_TR):
                 mask = TRs == i if i else slice(None)
-                connectivity_TR[i] += combinations[mask].tolist()
+                connectivity_TR[i] += combinations[mask].tolist() 
 
         # Convert the output format.
         for idx_TR in range(num_TR):
             if connectivity_TR[idx_TR]:
                 A = np.array(connectivity_TR[idx_TR])
-                B = A.copy()
-                B[B >= num_entity // 2] -= num_entity//2
-                A = A[~(B[:, 0] == B[:, 1])]
                 if A.size == 0:
-                    connectivity_TR[idx_TR] = [[[0,0]], [0.0], [num_entity, num_entity]]
+                    connectivity_TR[idx_TR] = [[[0,0]], [0.], [num_entity, num_entity]]
                 else:
                     A = np.unique(A, axis=0)
                     connectivity_TR[idx_TR] = [A.tolist(), [1.0 for _ in range(len(A))], [num_entity, num_entity]]
             else:
-                connectivity_TR[idx_TR] = [[[0,0]], [0.0], [num_entity, num_entity]]
+                connectivity_TR[idx_TR] = [[[0,0]], [0.], [num_entity, num_entity]]
 
         return connectivity_TR
 
@@ -712,6 +707,7 @@ class TEKG(Base):
         query_nodes, input_intervals = [], []
         batch_nodes = [] if flag_use_batch_graph else None
         num_entity = None
+        batch_nodes_idx = None
         for data_idx in idx_ls:
             file_path = "{}{}_idx_{}.json".format(self.data['path'], self.data['dataset_name'], data_idx)
             if not os.path.exists(file_path):
@@ -720,9 +716,12 @@ class TEKG(Base):
                 data = json.load(f)
 
             cur_query = data['query']
-            query_nodes.append(cur_query)
             input_intervals.append(cur_query[3:])
 
+            # We need to mask the query time during training.
+            cur_query[3:] = [9999 for _ in range(len(cur_query)-3)]
+
+            query_nodes.append(cur_query)
             if flag_use_batch_graph:
                 batch_nodes.append(cur_query)
                 for rule_len in range(1, 6):
@@ -738,14 +737,16 @@ class TEKG(Base):
             batch_nodes = np.array(batch_nodes)
             batch_nodes = np.unique(batch_nodes, axis=0)
             num_entity = len(batch_nodes)*2
+            batch_nodes, batch_nodes_idx = self._build_aug_nodes(batch_nodes, num_entity)
 
-        return query_nodes, input_intervals, batch_nodes, num_entity
+        return query_nodes, input_intervals, batch_nodes, batch_nodes_idx, num_entity
 
 
-    def _select_probability(self, probs, mode):
+    def _select_probability(self, probs, mode, min_prob=1e-4):
+        # min_prob: set minimum probability that make the training more stable.
         if mode == 'Train' and self.option.prob_type_for_training == 'max':
-            return max(probs)
-        return np.mean(probs)
+            return max(min_prob, max(probs))
+        return max(min_prob, np.mean(probs))
       
 
     def _update_event_probabilities(self, probs, idx_sample, prob_dict, num_entity, TEKG_nodes_aug, TEKG_nodes_idx_aug, mode):
@@ -754,11 +755,14 @@ class TEKG(Base):
         for idx_event_pos in [0, 1]:
             # Format: prob_dict[idx_event_pos][str_tuple(edge)][2*idx_query_time + idx_ref_time]
             for edge in prob_dict[str(idx_event_pos)]:
-                # The format we used for walk res is different from the original one.
+                # The format we used in walk res is different from the original one.
                 edge = eval(edge) if mode == 'Train' else edge
-                edge_reformatted = [edge[j] for j in [0,1,4,2,3]] 
+                edge_reformatted = [edge[j] for j in [0,1,4,2,3]]
                 edge_idx = TEKG_nodes_idx_aug[TEKG_nodes_aug.tolist().index(edge_reformatted)]
-                
+                # For the first event, we will do a reverse walk. Thus, we need to find the inv node in TEKG.
+                if idx_event_pos == 0:
+                    edge_idx += num_entity//2
+
                 for idx_query_time in [0, 1]:
                     for idx_ref_time in [0, 1]:
                         cur_probs = [item[0] for item in prob_dict[str(idx_event_pos)][str_tuple(edge)][str(2*idx_query_time + idx_ref_time)]]
@@ -766,7 +770,8 @@ class TEKG(Base):
                             continue
                         
                         # Use a composite index here to simplify the coding.
-                        idx_complete = 4*idx_event_pos + 2*idx_query_time + idx_ref_time
+                        # When building the model, we first calculate the last event and then the first event, first tqs and then tqe.
+                        idx_complete = 4*idx_query_time + 2*(1 - idx_event_pos) + idx_ref_time
                         probs[idx_sample][idx_complete][edge_idx] = self._select_probability(cur_probs, mode)
                         ref_event_idx[idx_complete, edge_idx] = 1
                         flag_valid = 1
@@ -774,35 +779,30 @@ class TEKG(Base):
         return flag_valid, ref_event_idx
 
 
-    def _format_outputs(self, idx_ls, query_edges, TEKG_nodes, num_entity, prob_dict, mode):
+    def _format_outputs(self, idx_ls, query_edges, TEKG_nodes, TEKG_nodes_idx, num_entity, prob_dict, mode):
         '''
         Format the outputs for the current batch.
         '''
         qq = [query[1] for query in query_edges]
 
         # In TEKG, the nodes are the events in TKG, thus, we use the index of the event in the TEKG_nodes list as the entity index.
-        hh = [TEKG_nodes.tolist().index(query) for query in query_edges]
+        hh = [TEKG_nodes.tolist()[:len(TEKG_nodes)].index(query) for query in query_edges]
 
         # In TEKG, the tail entity is the inv event of the head entity.
         # Thus, we add half the number of entities to the head entity index to get the tail entity index.
-        # In practice, we set the maximum number of entities in TEKG to be 40000. For dense TKGs, we use sampling to get these entities.
         tt = [h + num_entity//2 for h in hh]
 
-        # TEKG_nodes: nodes in current batch
-        # TEKG_nodes_aug: augmented nodes with inv nodes
-        # TEKG_nodes_idx_aug: index of nodes in TEKG_nodes_aug
-        TEKG_nodes_aug, TEKG_nodes_idx_aug = self._build_aug_nodes(TEKG_nodes, num_entity)
-
+ 
         if self.option.flag_ruleLen_split_ver:
             num_step = self.option.num_step-1
             pass
         
         # For initializing the probabilities, we use a uniform distribution. The shape of the probabilities is [num_samples, num_cases, num_entity].
         # Notice that entity in TEKG is event in TKG.
-        # idx_complete = 4*idx_event_pos + 2*idx_query_time + idx_ref_time
+        # idx_complete = 4*idx_query_time + 2*(1-idx_event_pos) + idx_ref_time
         num_cases = 8 if self.option.flag_interval else 2
         probs = [[[1./len(self.data['timestamp_range']) for _ in range(num_entity)] for _ in range(num_cases)] for _ in range(len(idx_ls))]
-        
+    
         valid_sample_idx, valid_ref_event_idx = [], [[], [], [], []]
         for (idx, data_idx) in enumerate(idx_ls):
             flag_valid = 0
@@ -811,7 +811,7 @@ class TEKG(Base):
             if data_idx not in prob_dict:
                 continue
 
-            flag_valid, ref_event_idx = self._update_event_probabilities(probs, idx, prob_dict[data_idx], num_entity, TEKG_nodes_aug, TEKG_nodes_idx_aug, mode)
+            flag_valid, ref_event_idx = self._update_event_probabilities(probs, idx, prob_dict[data_idx], num_entity, TEKG_nodes, TEKG_nodes_idx, mode)
 
             if flag_valid:
                 valid_sample_idx.append(idx)
@@ -821,9 +821,38 @@ class TEKG(Base):
 
 
     def create_graph(self, idx_ls, mode):
+        '''
+        Example: YAGO dataset train_idx: 91
+        Local TEKG:
+        Node 0: [[ 216    7  388 2012 2012]
+        Node 1: [ 217   10  216 9999 9999]
+        Node 2: [ 388   10 1629 1975 1975]
+        Node 3: [1514    0  217 1945 1945]
+        Node 4: [1514    4 1629 9999 9999]
+        Node 5: [1514   14 1629 9999 9999]
+
+        Node 6:  [ 388   17  216 2012 2012]
+        Node 7:  [ 216    0  217 9999 9999]
+        Node 8:  [1629    0  388 1975 1975]
+        Node 9:  [ 217   10 1514 1945 1945]
+        Node 10:  [1629   14 1514 9999 9999]
+        Node 11:  [1629    4 1514 9999 9999]]
+
+        head node: 4   [1514    4 1629 9999 9999]
+        tail node: 10  [1629   14 1514 9999 9999]
+
+        (Valid) path: we learn the prob dist of the second to last node in the path.
+        4 -> 8 -> 6 ->  7 -> (9) -> 4 
+        10 -> 3 -> 1 -> 0 -> (2) -> 10
+        
+        Random walk res:
+        first event: node 3    last event: node 2
+        Note: we need to find the inv node in TEKG for the first event.
+        '''
         connectivity_rel = self.data['connectivity_rel']
         connectivity_TR = self.data['connectivity_TR']
         TEKG_nodes = self.data['TEKG_nodes']
+        TEKG_nodes_idx = self.data['TEKG_nodes_idx']
         prob_dict = self.data['random_walk_res']
 
         flag_use_batch_graph = False
@@ -831,34 +860,69 @@ class TEKG(Base):
             # We can load the global TEKG in advance and use it for all batches. But it is too time-consuming.
             # Instead we use the batch graph for each batch.
             flag_use_batch_graph = True
+        
+        idx_ls = [91, 92, 93, 94, 95, 96, 97, 98, 99, 100]
 
-        query_nodes, input_intervals, batch_nodes, num_entity = self._process_saved_data(idx_ls, flag_use_batch_graph)
+        query_nodes, input_intervals, batch_nodes, batch_nodes_idx, num_entity = self._process_saved_data(idx_ls, flag_use_batch_graph)
+        
 
         batch_nodes = TEKG_nodes if batch_nodes is None else batch_nodes
+        batch_nodes_idx = TEKG_nodes_idx if batch_nodes_idx is None else batch_nodes_idx
+        num_entity = len(batch_nodes) if num_entity is None else num_entity
+
 
         if batch_nodes is None or len(batch_nodes) == 0:
             return None, None, None, None, None, None, [], None, None, None, None    
 
+
         if flag_use_batch_graph:
-            # We use batch_nodes (w/o augmentation) to build (augmented) connectivity_rel and (augmented) connectivity_TR.
-            connectivity_rel = self._build_connectivity_rel(batch_nodes, num_entity, self.data['num_rel'])
-            connectivity_TR = self._build_connectivity_TR(batch_nodes, num_entity, self.data['num_TR'])
+            # We use (augmented) batch_nodes to build (augmented) connectivity_rel and (augmented) connectivity_TR.
+            connectivity_rel = self._build_connectivity_rel(batch_nodes, batch_nodes_idx, num_entity, self.data['num_rel'])
+            connectivity_TR = self._build_connectivity_TR(batch_nodes, batch_nodes_idx, num_entity, self.data['num_TR'])
 
         
         if prob_dict is None:
             prob_dict, input_intervals_dict = self._initialize_walk_res(idx_ls, mode)
-            
+
             if mode == 'Test':
                 for i, data_idx in enumerate(idx_ls):
                     if data_idx in input_intervals_dict:
                         input_intervals[i] = input_intervals_dict[data_idx].tolist()
 
         # For probs and valid_ref_event_idx, we use a composite index here to simplify the coding.
-        # idx_complete = 4*idx_event_pos + 2*idx_query_time + idx_ref_time
-        qq, hh, tt, probs, valid_sample_idx, valid_ref_event_idx = self._format_outputs(idx_ls, query_nodes, batch_nodes, num_entity, prob_dict, mode)
+        # idx_complete = 4*idx_query_time + 2*(1-idx_event_pos) + idx_ref_time
+        qq, hh, tt, probs, valid_sample_idx, valid_ref_event_idx = self._format_outputs(idx_ls, query_nodes, batch_nodes, batch_nodes_idx, num_entity, prob_dict, mode)
         input_samples, final_preds = None, None
-        
-        print(probs)
-        sys.exit()
 
-        return qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, valid_ref_event_idx, input_intervals, input_samples, final_preds
+        
+
+        inputs_for_enhancement = []
+        if self.option.flag_state_vec_enhancement:
+            # Use fast ver graph to prepare data.
+            graph = TEKG_int_fast_ver(self.option, self.data)
+            _, query_rels, refNode_sources, random_walk_res, refEdges, _, _, _, _ = graph.create_graph(idx_ls, mode)
+            
+            refNode_index = []
+            idx_sample = 0
+            for (i, node_dict) in enumerate(refEdges):
+                # node_dict format: [edge, idx_event_pos] (0: first event, 1: last event)
+                node = node_dict[0]
+                node = eval(node)
+                node = [node[j] for j in [0, 1, 4, 2, 3]] # change the edge format.
+                node_idx = batch_nodes_idx[batch_nodes.tolist().index(node)] # Find its idx in TEKG.
+                if node_dict[1] == 0:
+                    # We need to use the inv node for first event.
+                    node_idx += num_entity//2
+                
+                # The format of refNode_sources is like:
+                # [1, 1, 0, 0, 0]
+                # [0, 0, 1, 0, 0]
+                # [0, 0, 0, 1, 1]
+                # which shows where the nodes come from.
+                while refNode_sources[idx_sample][i] == 0:
+                    idx_sample += 1
+                refNode_index.append([idx_sample, node_idx])
+
+            inputs_for_enhancement = [query_rels, random_walk_res, refNode_index]
+
+        return qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, inputs_for_enhancement, input_intervals, input_samples, final_preds

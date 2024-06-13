@@ -100,7 +100,7 @@ class Data_preprocessor():
         data['rel_ls_no_dur'] = [[4, 16, 17, 20], [0, 7], None, None, None][dataset_index]
 
         # We do not create the whole graph in advance which is time-consuming.
-        data['connectivity_rel'], data['connectivity_TR'], data['TEKG_nodes'] = None, None, None
+        data['connectivity_rel'], data['connectivity_TR'], data['TEKG_nodes'], data['TEKG_nodes_idx'] = None, None, None, None
 
         # Todo: use the duration information for learning
         if hasattr(option, 'flag_use_dur') and option.flag_use_dur:
