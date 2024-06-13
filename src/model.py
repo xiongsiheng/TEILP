@@ -25,7 +25,7 @@ class Learner(object):
         
         # weight for the state vector enhancement (w/ shallow layers)
         # final state = gamma * final_state + (1-gamma) * enhance_state
-        self.gamma = 0.
+        self.gamma = 0.7
 
 
         self.flag_int = option.flag_interval
