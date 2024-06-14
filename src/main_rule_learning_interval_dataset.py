@@ -72,7 +72,7 @@ def main():
     # After that, set it to False to load the walk results directly.
     # Once we change the setting, we need to re-generate the walk results.
     processor = Data_preprocessor()
-    data = processor.prepare_data(option, process_walk_res=False)
+    data = processor.prepare_data(option, process_walk_res=True)
 
 
     learner = Learner(option, data)
