@@ -36,29 +36,51 @@ class Experiment():
             self.metrics = ['MAE']
 
 
-    def _calculate_output(self, myTEKG, run_fn, batch_idx_ls, mode, flag_rm_seen_ts, train_edges, timestamp_range, pred_dur_dict):
+    def _calculate_output(self, myTEKG, run_fn, batch_idx_ls, mode, flag_rm_seen_ts, train_edges, timestamp_range, pred_dur_dict, state_vec_only):
         '''
         Calculate the output of the model for a batch of data.
         '''
         if self.option.flag_acceleration:
-            # Shape: query_rels: [] * dummy_batch_size (num_events);  refNode_source: [(dummy_batch_size,)] * batch_size;
-            #        res_random_walk: (num_rules_in_total_for_different_events, 2); [event_idx, rule_idx]
-            #        probs: [[(num_timestamp, )] * dummy_batch_size ] * 8
-            qq, query_rels, refNode_source, res_random_walk, refEdges, valid_sample_idx, input_intervals, input_samples, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode)
+            # Shape:
+            #    query_rels: [] * dummy_batch_size (num_events);  refNode_source: [(dummy_batch_size,)] * batch_size;
+            #    res_random_walk: (num_rules_in_total_for_different_events, 2); [event_idx, rule_idx]
+            #    probs: [[(num_timestamp, )] * dummy_batch_size ] * 8
+            qq, query_rels, refNode_source, res_random_walk, refEdges, valid_sample_idx, \
+                            input_intervals, input_samples, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode)
         else:
-            qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, inputs_for_enhancement, input_intervals, input_samples, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode)
+            qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, \
+                valid_ref_event_idx, inputs_for_enhancement, input_intervals, input_samples, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode)
+
+        
 
         if len(valid_sample_idx) == 0:
             # all samples are invalid (no walk can be found)
             return [], [], []
 
-        if mode == "Train":           
+   
+        gts = np.array(input_intervals)[valid_sample_idx]
+
+        if mode == "Train" or state_vec_only:        
             inputs = [query_rels, refNode_source, res_random_walk] if self.option.flag_acceleration else \
                      [qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, inputs_for_enhancement]
             output = run_fn(self.sess, inputs)
-            preds, gts = [], []
+        
+            if np.isnan(output).any():
+                # For debugging only.
+                print("Nan in the output")
+                print(batch_idx_ls, output)
+                sys.exit(0)
+            
+            preds = []
         else:
-            output = final_preds  # [(bacth_size, num_timestamp)] * (1 + int(flag_int))
+            if self.option.flag_acceleration:
+                output = final_preds  # [(bacth_size, num_timestamp)] * (1 + int(flag_int))
+            else:
+                # idx_refNode
+                # prob_refNode = state_vec_recorded[idx_sample, idx_batch_node]  # prob_node
+                # prob_refNode * query_time_dist[idx_refNode, idx_query_time, idx_ref_time] * attn_refType[idx_event_pos]
+                # pred = []
+                pass
 
             # Obtain the predictions from the output.
             if len(output[0]) == 0:
@@ -74,8 +96,6 @@ class Experiment():
                     preds.append(prob_t)
                 preds = self._adjust_preds_based_on_dur(preds, batch_idx_ls, valid_sample_idx, pred_dur_dict, qq)
             
-            gts = np.array(input_intervals)[valid_sample_idx]
-
         return output, preds, gts
 
 
@@ -119,18 +139,22 @@ class Experiment():
         return preds
 
 
-    def running_model(self, model, run_fn, batch_size, idx_ls, mode, flag_rm_seen_ts):
+    def running_model(self, model, run_fn, batch_size, idx_ls, mode, flag_rm_seen_ts, state_vec_only):
         timestamp_range = self.data['timestamp_range']
         train_edges = self.data['train_edges']
         pred_dur_dict = self.data['pred_dur'] if self.option.flag_use_dur else None
-
+        
+        # Split the index list into batches.       
         idx_ls = split_list_into_batches(idx_ls, batch_size=batch_size)
         
-        epoch_loss, epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE = [], [], [], []
+        epoch_loss, epoch_output, epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE = [], [], [], [], []
         for batch_idx_ls in tqdm(idx_ls, desc=mode):
-            output, preds, gts = self._calculate_output(model, run_fn, batch_idx_ls, mode, flag_rm_seen_ts, train_edges, timestamp_range, pred_dur_dict)
+            output, preds, gts = self._calculate_output(model, run_fn, batch_idx_ls, mode, flag_rm_seen_ts, train_edges, timestamp_range, pred_dur_dict, state_vec_only)
+            
             if mode == "Train":
-                epoch_loss += list(output)
+                epoch_loss.append(output) 
+            elif state_vec_only:
+                epoch_output.append(output + [gts]) 
             else:
                 if 'aeIOU' in self.metrics:
                     epoch_eval_aeIOU += obtain_aeIoU(preds, gts)
@@ -142,20 +166,20 @@ class Experiment():
         if mode == "Train":
             if len(epoch_loss) == 0:
                 epoch_loss = [100]
-            
             if self.option.create_log:
-                msg = self.msg_with_time(
-                    "Epoch %d mode %s Loss %0.4f " 
-                    % (self.epoch+1, mode, np.mean(epoch_loss)))
+                msg = self.msg_with_time("Epoch %d mode %s Loss %0.4f " % (self.epoch+1, mode, np.mean(epoch_loss)))
                 self.log_file.write(msg + "\n")
-            
             print("Epoch %d mode %s Loss %0.4f " % (self.epoch+1, mode, np.mean(epoch_loss)))
             return epoch_loss
+        elif state_vec_only:
+            return epoch_output
         else:
             return epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE
 
 
-    def one_epoch(self, mode, total_idx=None, batch_size=32):
+    def one_epoch(self, mode, total_idx=None, batch_size=32, state_vec_only=False):
+        assert mode in ["Train", "Valid", "Test"]
+
         flag_rm_seen_ts = False # remove seen ts in training set
         if self.data['dataset_name'] in ['icews14', 'icews05-15', 'gdelt'] and not self.option.shift:
             flag_rm_seen_ts = True
@@ -164,15 +188,22 @@ class Experiment():
         myTEKG = TEKG_family(self.option, self.data)
 
         # To accelerate the inference, we use online algorithm to calculate the output instead of re-running the model.
-        run_fn = self.learner.update if mode == "Train" else None
-
+        # For fast version, we don't need to run the model. We only need rule scores and refType scores.
+        # For normal version, we only need to run the model to get and save the state vectors. And then we predict time without running the model.
+        if mode == "Train":
+            run_fn = self.learner.update
+        elif state_vec_only:
+            run_fn = self.learner.get_state_vec
+        else:
+            run_fn = None
+        
         # Prepare the index list for the current mode.
         idx_ls_dict = {"Train": self.data['train_idx_ls'], "Valid": self.data['valid_idx_ls'], "Test": self.data['test_idx_ls']}
         idx_ls = total_idx if total_idx is not None else idx_ls_dict[mode]
         if mode == "Train":
             random.shuffle(idx_ls)
      
-        return self.running_model(myTEKG, run_fn, batch_size, idx_ls, mode, flag_rm_seen_ts)
+        return self.running_model(myTEKG, run_fn, batch_size, idx_ls, mode, flag_rm_seen_ts, state_vec_only)
 
 
     def one_epoch_train(self, total_idx=None):
@@ -233,11 +264,33 @@ class Experiment():
         return eval1
 
 
-    def get_rule_scores(self):
-        # Toodo: normal version
-        if self.option.flag_acceleration:
-            rule_scores, refType_scores = self.learner.get_rule_scores_acc(self.sess)
-            return rule_scores, refType_scores
+    def save_rule_scores(self):
+        rule_scores, refType_scores = self.learner.get_rule_scores_fast_ver(self.sess)
+
+        path_suffix = '_' if not self.option.shift else '_time_shifting_'
+        if not os.path.exists('../output/' + self.option.dataset + path_suffix[:-1]):
+            os.mkdir('../output/' + self.option.dataset + path_suffix[:-1])
+
+        for rel in range(self.data['num_rel']):
+            output = {}
+            output['rule_scores'] = rule_scores[rel, :].tolist()
+            output['refType_scores'] = [scores[rel, :].tolist() for scores in refType_scores]
+        
+            cur_path = '../output/' + self.option.dataset + path_suffix[:-1] + '/' + self.option.dataset + path_suffix
+            if self.option.shift and rel >= self.data['num_rel']//2:
+                cur_path += 'fix_ref_time_'
+            cur_path += 'rule_scores_rel_' + str(rel) + '.json'
+                    
+            with open(cur_path, 'w') as file:
+                json.dump(output, file)
+
+
+    def save_state_vectors(self, total_idx):
+        state_vecs = self.one_epoch("Test", total_idx=total_idx, batch_size=4, state_vec_only=True)
+        path = os.path.join(self.option.this_expsdir, "state_vecs.json")
+        with open(path, "w") as file:
+            json.dump(state_vecs, file)
+
 
     def close_log_file(self):
         self.log_file.close()

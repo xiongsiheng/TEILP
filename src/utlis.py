@@ -35,8 +35,10 @@ def list_subtract(ls1, ls2):
     return result
 
 
-def my_shuffle(data):
-    # np.random.seed(12)
+def my_shuffle(data, seed=None):
+    if seed is not None:
+        np.random.seed(seed)
+
     idx = list(range(len(data)))
     random.shuffle(idx)
     new_data = data[idx]

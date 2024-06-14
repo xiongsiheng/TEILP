@@ -470,16 +470,13 @@ class Data_preprocessor():
                                     cur_probs = np.array(1./len(timestamp_range)) if mode == 'Train' else np.array([1./len(timestamp_range) for _ in range(len(timestamp_range))])
                                 
                                 cur_probs = (cur_probs*alpha_edge).tolist()
-
-                                if flag_acceleration:
-                                    cur_probs = [cur_probs, p_idx]
+                                cur_probs = [cur_probs, p_idx]  # Add rule idx for tracking.
 
                                 if flag_rule_split:
                                     probs[data_idx][idx_event_pos][str_tuple(edge)][2*idx_query_time + idx_ref_time][ruleLen].append(cur_probs)                                    
                                 else:
                                     probs[data_idx][idx_event_pos][str_tuple(edge)][2*idx_query_time + idx_ref_time].append(cur_probs)
-            # Loop end for one rule pattern
-
+            
             if len(cur_valid_rules) == 0:
                 continue
 
@@ -492,8 +489,7 @@ class Data_preprocessor():
                 with open('../output/process_res/' + filename, 'w') as f:
                     json.dump(output, f)
 
-        # Loop end for one sample
-
+        
         output_ls = [input_intervals]
         if flag_output_probs_with_ref_edges:
             output_ls.append(probs)
@@ -963,7 +959,9 @@ class Rule_summarizer(Data_preprocessor):
                                 flag_capture_dur_only=False, rel=None, known_edges=None, flag_few_training=0,
                                 ratio=None, imbalanced_rel=None, flag_biased=0, exp_idx=None, targ_rel_ls=None,
                                 num_processes=20, stat_res_path=''):
-
+        '''
+        This function is for interval dataset only.
+        '''
         file_ls, rel = obtain_walk_file_ls(path, dataset, idx_ls, ratio, imbalanced_rel, flag_biased, exp_idx)
         targ_rel_ls = rel if rel is not None else targ_rel_ls
 
@@ -977,4 +975,13 @@ class Rule_summarizer(Data_preprocessor):
             delayed(self.process_TEILP_results_in_batch)(path, file_ls, with_ref_end_time, flag_capture_dur_only, rel_batch, known_edges, stat_res_path) for rel_batch in rel_batch_ls
             )
         
+        return
+    
+    def process_random_walk_with_sampling_results(self, dataset, mode, num_rel, file_paths, file_suffix, num_workers=24, flag_time_shifting=False):
+        '''
+        This function is for timestamp dataset only.
+        '''
+        rel_ls = split_list_into_batches(range(num_rel*2), num_batches=num_workers)
+        Parallel(n_jobs=num_workers)(delayed(self.read_random_walk_results)(dataset, piece, file_paths, file_suffix, flag_interval=False, 
+                                                    flag_plot=False, mode=mode, flag_time_shifting=flag_time_shifting) for piece in rel_ls)
         return
