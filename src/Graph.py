@@ -49,7 +49,7 @@ class Base(object):
         else:
             # for test mode, there is no pre-processing
             preprocessor = Data_Processor()
-            output = preprocessor.prepare_inputs_interval_ver(nodes=self.nodes, path=self.data['path'], 
+            output = preprocessor.prepare_inputs_interval_ver(nodes=self.nodes, res_path=self.data['path'], 
                                                                 dataset=self.data['dataset_name'], 
                                                                 idx_ls=idx_ls, pattern_ls=self.data['pattern_ls'], 
                                                                 timestamp_range=self.data['timestamp_range'],
@@ -145,11 +145,11 @@ class TEKG_int_fast_ver(Base):
 
         rule_used_ls = []
         for idx_event_pos in [0,1]:
-            for edge in walk_res[idx_event_pos]:
+            for edge in walk_res[str(idx_event_pos)]:
                 for idx_query_time in [0,1]:
                     for idx_ref_time in [0,1]:
                         idx_complete = idx_query_time*2 + idx_ref_time
-                        probs = walk_res[idx_event_pos][edge][idx_complete]
+                        probs = walk_res[str(idx_event_pos)][edge][str(idx_complete)]
                         for prob_dict in probs:
                             if prob_dict[1] not in rule_used_ls:
                                 rule_used_ls.append(prob_dict[1])
@@ -325,6 +325,8 @@ class TEKG_int_fast_ver(Base):
             refNode_sources = self._obtain_one_hot_form(refNode_nums)
             probs = self._merge_list_inside(probs)
         else:
+            # RefNode_sources in test mode are too large.
+            refNode_sources = []
             for i in range(1+ int(self.option.flag_interval)):
                 if len(final_preds[i]) > 0:
                     final_preds[i] = np.vstack(final_preds[i])
