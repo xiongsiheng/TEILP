@@ -1108,7 +1108,6 @@ class TEKG(Base):
             # Also, we need to prepare all the data during training if call_by_TEKG is True.
             _, query_rels, refNode_sources, random_walk_res, refEdges, _, _, _, _ = graph.create_graph(idx_ls, mode)
 
-            # print(refNode_sources)
             refNode_index = self._obtain_refNode_index(refEdges, refNode_sources, batch_nodes, batch_nodes_idx, num_entity)
 
             # collect the inputs for enhancement.
@@ -1123,5 +1122,4 @@ class TEKG(Base):
             #       e.g.  [[0, 125], [0, 126], [0, 49], [1, 13], [1, 52], [1, 75], [1, 148], [1, 150]]
             inputs_for_enhancement = [query_rels, random_walk_res, refNode_index]
        
-
         return qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, valid_refNode_idx, inputs_for_enhancement, input_intervals, input_samples, final_preds
