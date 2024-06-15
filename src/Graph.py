@@ -14,11 +14,14 @@ class Base(object):
         self.data = data
 
         dataset_index = ['wiki', 'YAGO', 'icews14', 'icews05-15', 'gdelt100'].index(self.data['dataset_name'])
+
+        # Parameters for the exponential distribution.
+        # Only used in icews and gdelt datasets.
         self.weight_exp_dist = [None, None, 0.01, 0.01, 0.05][dataset_index]
         self.scale_exp_dist = [None, None, 5, 10, 100][dataset_index]
         self.offset_exp_dist = [None, None, 0, 0, 0][dataset_index]
 
-        # We only use all nodes to obtain the ground truth time. The validation and test set are masked in random walk results.
+        # Here we use all nodes to obtain the ground truth. The validation and test set are masked in random walk results.
         self.nodes = np.vstack((self.data['train_nodes'], self.data['valid_nodes'], self.data['test_nodes']))
     
 
@@ -27,25 +30,28 @@ class Base(object):
         Given the idx_ls, either read the pre-processing results or do the pre-processing right now
 
         Parameters:
-        - idx_ls: The list of indices for which to generate the TEKG.
+        - idx_ls: The list of sample indices for which to generate the TEKG.
         - mode: The mode of operation ('Train' or  'Valid' or 'Test').
 
         Returns:
-        - prob_dict: A dictionary containing the probabilities for each sample. 
-        - target_interval: tarerget interval for each sample (test mode only)
+        - prob_dict: Probabilities of the query time given reference nodes and rules. 
+        - query_time: the query time for each sample.
         '''
         assert mode in ['Train', 'Valid', 'Test']
         
         if mode == 'Train':
             # instead of reading all the results, we read the results for the current batch
             prob_dict = {}
-            target_interval = {}
+            query_time = {}
             for data_idx in idx_ls:
                 filepath = '../output/process_res/{}_idx_{}_input.json'.format(self.data['dataset_name'], data_idx)
                 if not os.path.exists(filepath):
                     continue
                 with open(filepath) as f:
-                    prob_dict[data_idx] = json.load(f)[1]
+                    data = json.load(f)
+ 
+                query_time[data_idx] = data[0]
+                query_time[data_idx] = data[1]    
         else:
             # for test mode, there is no pre-processing
             preprocessor = Data_Processor()
@@ -58,14 +64,15 @@ class Base(object):
                                                                 targ_rel=None, mode=mode,
                                                                 flag_time_shift=self.option.shift, 
                                                                 show_tqdm=False, probs_normalization=True)
-            prob_dict, target_interval = output[-1], output[-2] # only test mode needs targ_interval
+            query_time, prob_dict = output[0], output[1]
             
-        return prob_dict, target_interval
+        return prob_dict, query_time
 
 
     def _merge_list_inside(self, ori_ls):
         '''
-        Given a list of list, we want to merge each list at the same position.
+        Given a list, where each element has the same number of lists, we want to merge the inside lists at the same position.
+        E.g. [[ls1, ls2], [ls3, ls4]] -> [ls1 + ls3, ls2 + ls4]
         '''
         if len(ori_ls) == 0:
             return []
@@ -81,7 +88,8 @@ class Base(object):
 
     def _merge_array_inside(self, ori_ls):
         '''
-        Given a list of arrays, we want to merge each array at the same position.
+        Given a list, where each element has the same number of arrays, we want to merge the inside arrays at the same position.
+        E.g. [[array1, array2], [array3, array4]] -> [np.vstack([array1, array3]), np.vstack([array2, array4])]
         '''
         if len(ori_ls) == 0:
             return []
@@ -96,8 +104,12 @@ class Base(object):
 
 
 
+
 class TEKG_family():
     def __init__(self, option, data):
+        '''
+        Select the appropriate TEKG version.
+        '''
         if option.flag_acceleration:
             if data['dataset_name'] in ['icews14', 'icews05-15', 'gdelt']:
                 self.graph = TEKG_timestamp_fast_ver(option, data)
@@ -105,6 +117,7 @@ class TEKG_family():
                 self.graph = TEKG_int_fast_ver(option, data)
         else:
             self.graph = TEKG(option, data)
+
 
 
 
