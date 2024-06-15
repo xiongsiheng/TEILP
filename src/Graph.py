@@ -987,27 +987,7 @@ class TEKG(Base):
         Create the TEKG in batch.
         For test mode, we have two steps: 1) calculate final state vec only; 2) predict time given the final state vec.
 
-        Parameters:
-            idx_ls: The list of indices for which to generate the TEKG.
-            mode: The mode of operation ('Train' or  'Valid' or 'Test').
-            stage: The stage of operation ('obtain state vec' or 'time prediction').
-            extra_data: The extra data for the current batch (final_state_vec, attn_refType).
-        
-        Returns:
-            qq: The query relations.
-            hh: The head nodes.
-            tt: The tail nodes.
-            connectivity_rel: The connectivity matrix for the relations.
-            connectivity_TR: The connectivity matrix for the temporal relations.
-            probs: The probabilities for query time given the reference nodes.
-            valid_local_idx: The local indices of valid samples.
-            valid_ref_idx: The indices of valid reference nodes.
-            inputs_for_enhancement: The inputs for state vector enhancement.
-            input_samples: The input samples.
-            final_preds: The final predictions.
-        
-
-        We show an example TEKG: 
+        We show an example TEKG here:
         YAGO dataset train_idx: 91
         Local TEKG:
         Node 0: [[ 216    7  388 2012 2012]
@@ -1032,8 +1012,28 @@ class TEKG(Base):
         10 -> 3 -> 1 -> 0 -> (2) -> 10
         
         Random walk res:
-        first event: node 3    last event: node 2
+        first event: node 3 (inv: node 9)   last event: node 2
         Note: we need to find the inv node in TEKG for the first event.
+
+            
+        Parameters:
+            idx_ls: The list of indices for which to generate the TEKG.
+            mode: The mode of operation ('Train' or  'Valid' or 'Test').
+            stage: The stage of operation ('obtain state vec' or 'time prediction').
+            extra_data: The extra data for the current batch (final_state_vec, attn_refType).
+        
+        Returns:
+            qq: The query relations.
+            hh: The head nodes.
+            tt: The tail nodes.
+            connectivity_rel: The connectivity matrix for the relations.
+            connectivity_TR: The connectivity matrix for the temporal relations.
+            probs: The probabilities for query time given the reference nodes.
+            valid_local_idx: The local indices of valid samples.
+            valid_ref_idx: The indices of valid reference nodes.
+            inputs_for_enhancement: The inputs for state vector enhancement.
+            input_samples: The input samples.
+            final_preds: The final predictions.
         '''
         assert mode in ['Train', 'Valid', 'Test']
         assert stage in [None, 'obtain state vec', 'time prediction']
