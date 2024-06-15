@@ -8,19 +8,18 @@ from gadgets import *
 
 
 
-class Base():
+class Base(object):
     def __init__(self, option, data):
         self.option = option
         self.data = data
-        self.file_suffix = '_time_shifting_' if self.option.shift else '_'
 
         dataset_index = ['wiki', 'YAGO', 'icews14', 'icews05-15', 'gdelt100'].index(self.data['dataset_name'])
         self.weight_exp_dist = [None, None, 0.01, 0.01, 0.05][dataset_index]
         self.scale_exp_dist = [None, None, 5, 10, 100][dataset_index]
         self.offset_exp_dist = [None, None, 0, 0, 0][dataset_index]
 
-        # We only use all edges to obtain the ground truth time. The validation and test set are masked in random walk results.
-        self.edges = np.vstack((self.data['train_edges'], self.data['valid_edges'], self.data['test_edges']))
+        # We only use all nodes to obtain the ground truth time. The validation and test set are masked in random walk results.
+        self.nodes = np.vstack((self.data['train_nodes'], self.data['valid_nodes'], self.data['test_nodes']))
     
 
     def _initialize_walk_res(self, idx_ls, mode):
@@ -38,38 +37,62 @@ class Base():
         assert mode in ['Train', 'Valid', 'Test']
         
         if mode == 'Train':
-            self.read_saved_res = True
             # instead of reading all the results, we read the results for the current batch
             prob_dict = {}
             target_interval = {}
             for data_idx in idx_ls:
-                path_probs = '../output/process_res/{}_idx_{}_input.json'.format(self.data['dataset_name'], str(data_idx))
-                if not os.path.exists(path_probs):
-                    # print(path_probs)
+                filepath = '../output/process_res/{}_idx_{}_input.json'.format(self.data['dataset_name'], data_idx)
+                if not os.path.exists(filepath):
                     continue
-                with open(path_probs) as f:
+                with open(filepath) as f:
                     prob_dict[data_idx] = json.load(f)[1]
         else:
-            self.read_saved_res = False
-            preprocessor = Data_preprocessor()
             # for test mode, there is no pre-processing
-            output = preprocessor.prepare_inputs_interval_ver(edges=self.edges, path=self.data['path'], 
-                                         dataset=self.data['dataset_name'], 
-                                         idx_ls=idx_ls,
-                                         pattern_ls=self.data['pattern_ls'], 
-                                         timestamp_range=self.data['timestamp_range'], 
-                                         num_rel=self.data['num_rel']//2,
-                                         ts_stat_ls=self.data['ts_stat_ls'], 
-                                         te_stat_ls=self.data['te_stat_ls'],
-                                         with_ref_end_time=True,
-                                         targ_rel=None, num_samples_dist=self.data['num_samples_dist'], 
-                                         mode=mode, rm_ls=self.data['rm_ls'],
-                                         flag_output_probs_with_ref_edges=True,
-                                         flag_acceleration=self.option.flag_acceleration,
-                                         flag_time_shift=self.option.shift, show_tqdm=False, probs_normalization=True)
+            preprocessor = Data_Processor()
+            output = preprocessor.prepare_inputs_interval_ver(nodes=self.nodes, path=self.data['path'], 
+                                                                dataset=self.data['dataset_name'], 
+                                                                idx_ls=idx_ls, pattern_ls=self.data['pattern_ls'], 
+                                                                timestamp_range=self.data['timestamp_range'],
+                                                                ts_stat_ls=self.data['ts_stat_ls'], 
+                                                                te_stat_ls=self.data['te_stat_ls'],
+                                                                targ_rel=None, mode=mode,
+                                                                flag_time_shift=self.option.shift, 
+                                                                show_tqdm=False, probs_normalization=True)
             prob_dict, target_interval = output[-1], output[-2] # only test mode needs targ_interval
             
         return prob_dict, target_interval
+
+
+    def _merge_list_inside(self, ori_ls):
+        '''
+        Given a list of list, we want to merge each list at the same position.
+        '''
+        if len(ori_ls) == 0:
+            return []
+        
+        merged_ls = []
+        for j in range(len(ori_ls[0])):
+            output = []
+            for i in range(len(ori_ls)):
+                output += ori_ls[i][j]
+            merged_ls.append(np.array(output))
+        return merged_ls
+
+
+    def _merge_array_inside(self, ori_ls):
+        '''
+        Given a list of arrays, we want to merge each array at the same position.
+        '''
+        if len(ori_ls) == 0:
+            return []
+        
+        merged_ls = []
+        for j in range(len(ori_ls[0])):
+            output = []
+            for i in range(len(ori_ls)):
+                output.append(ori_ls[i][j])
+            merged_ls.append(np.vstack(output))
+        return merged_ls
 
 
 
@@ -87,10 +110,11 @@ class TEKG_family():
 
 class TEKG_int_fast_ver(Base):
     def __init__(self, option, data, call_by_TEKG=False):
-        super().__init__(option, data)
-        # call_by_TEKG: In TEKG, we need to distinguish one event at different event pos, i.e., 
-        #               if an event is both the first and the last event, we consider it as two events.
-        #               Also, we need to prepare all the data during training if call_by_TEKG is True.
+        super(TEKG_int_fast_ver, self).__init__(option, data)
+        # call_by_TEKG: 
+        #   In TEKG, we need to distinguish one event at different event pos, i.e., 
+        #   if an event is both the first and the last event, we consider it as two events.
+        #   Also, we need to prepare all the data during training if call_by_TEKG is True.
         self.call_by_TEKG = call_by_TEKG
         
 
@@ -113,8 +137,9 @@ class TEKG_int_fast_ver(Base):
     def _create_rule_used_ls(self, walk_res, query_rel, mode, max_rule_num=20):
         '''
         For each sample, we choose a fixed number of rules to use according to their scores.
-        Previous: 100
+        Previous max_rule_num: 100 (Found not necessary.)
         '''
+        # No prior for training and no need when called by TEKG.
         if mode == 'Train' or self.call_by_TEKG:
             return None, None, None
 
@@ -159,24 +184,21 @@ class TEKG_int_fast_ver(Base):
         flag_valid = False
         refNode_probs, refNode_rule_idx, preds = {}, {}, {}
         for idx_event_pos in [0,1]:
-            # change the format
-            idx_event_pos = str(idx_event_pos) if self.read_saved_res else idx_event_pos
-            for edge in walk_res[idx_event_pos]:
+            for edge in walk_res[str(idx_event_pos)]:
                 if eval(edge)[2] == 9999 or eval(edge)[3] == 9999:
                     # we don't need unknown time events as reference events
                     continue
                 if edge not in refNode_probs:
                     refNode_probs[edge] = {0: {0: {0:[], 1:[]}, 1: {0:[], 1:[]}}, 1: {0: {0:[], 1:[]}, 1: {0:[], 1:[]}}}  # [idx_event_pos][idx_query_time][idx_ref_time]
                     refNode_rule_idx[edge] = []
-                    if mode == 'Test':
+                    if mode == 'Test' and (not self.call_by_TEKG):
                         preds[edge] = {0: 0, 1: 0}  # query ts or te
 
                 # for each event, we have a list of probabilities
                 for idx_query_time in [0,1]:
                     for idx_ref_time in [0,1]:
                         idx_complete = idx_query_time*2 + idx_ref_time
-                        idx_complete = str(idx_complete) if self.read_saved_res else idx_complete
-                        probs = walk_res[idx_event_pos][edge][idx_complete]
+                        probs = walk_res[str(idx_event_pos)][edge][str(idx_complete)]
 
                         # Given the query, the event pos and the reference event, more than one rules are satisfied.
                         for prob_dict in probs:
@@ -207,7 +229,7 @@ class TEKG_int_fast_ver(Base):
             print('Todo')
             pass
         
-        if mode == 'Test' and len(preds) > 0 and not self.call_by_TEKG:
+        if mode == 'Test' and (len(preds) > 0) and (not self.call_by_TEKG):
             # Given the sample, merge probs from different events.
             final_preds = {0: 0, 1: 0}
             for edge in preds:
@@ -239,7 +261,7 @@ class TEKG_int_fast_ver(Base):
                         cnt_edge_num += 1
             
             # If we do not want to distinguish the event pos, we only consider the edge once.
-            cnt_edge_num = max(cnt_edge_num, 1) if self.call_by_TEKG else cnt_edge_num
+            cnt_edge_num = min(cnt_edge_num, 1) if not self.call_by_TEKG else cnt_edge_num
             num_valid_edge += cnt_edge_num
 
             rule_idx.append(rule_idx_with_probs)  # [idx_event_in_batch, idx_rule, prob] * 4 * (1+flag_int)
@@ -272,24 +294,11 @@ class TEKG_int_fast_ver(Base):
         return one_hot
 
 
-    def _merge_list_inside(self, ori_ls):
+    def _process_walk_res(self, idx_ls, random_walk_res, mode, query_relations):
         '''
-        Given a list of list, we want to merge each list at the same position.
+        Process the walk res to create the structured data.
         '''
-        if len(ori_ls) == 0:
-            return []
-        
-        merged_ls = []
-        for j in range(len(ori_ls[0])):
-            output = []
-            for i in range(len(ori_ls)):
-                output += ori_ls[i][j]
-            merged_ls.append(np.array(output))
-        return merged_ls
-
-
-    def _process_graph(self, idx_ls, random_walk_res, mode, query_relations):
-        valid_sample_idxs, query_rel_dummy, refNode_nums, valid_rule_idx, refEdges = [], [], [], [], []
+        valid_local_idx, query_rel_dummy, refNode_nums, probs, refNodes = [], [], [], [], []
         final_preds = [[] for _ in range(1+ int(self.option.flag_interval))]
         for idx, query_idx in enumerate(idx_ls):
             if query_idx not in random_walk_res:
@@ -303,44 +312,60 @@ class TEKG_int_fast_ver(Base):
                 continue
             
             preds = self._update_outputs(refNode_probs, refNode_rule_idx, query_relations, idx, 
-                                         valid_sample_idxs, refNode_nums, query_rel_dummy, 
-                                         valid_rule_idx, refEdges,
-                                         mode, preds)
-            if mode == 'Test' and not self.call_by_TEKG:
+                                         valid_local_idx, refNode_nums, query_rel_dummy, 
+                                         probs, refNodes, mode, preds)
+            if mode == 'Test' and (not self.call_by_TEKG):
                 for i in range(1+ int(self.option.flag_interval)):
                     final_preds[i].append(preds[i])
-
 
         # For training, we create all matrixes; for test, we directly calculate the probs.
         if mode == 'Train' or self.call_by_TEKG:    
             # Finalizes the structure of refNode_sources based on rule_idx
             # refNode_sources: node from which sample
             refNode_sources = self._obtain_one_hot_form(refNode_nums)
-            merged_valid_rule_idx = self._merge_list_inside(valid_rule_idx)
+            probs = self._merge_list_inside(probs)
         else:
             for i in range(1+ int(self.option.flag_interval)):
                 if len(final_preds[i]) > 0:
                     final_preds[i] = np.vstack(final_preds[i])
 
-        return valid_sample_idxs, query_rel_dummy, refNode_sources, merged_valid_rule_idx, refEdges, final_preds
+        return valid_local_idx, query_rel_dummy, refNode_sources, probs, refNodes, final_preds
 
 
     def create_graph(self, idx_ls, mode):
+        '''
+        Create the graph for the given idx_ls and mode.
+
+        Parameters:
+            idx_ls: The list of indices for which to generate the TEKG.
+            mode: The mode of operation ('Train' or  'Valid' or 'Test').
+
+        Returns:
+            query_rel: The original query relations.
+            query_rel_dummy: We duplicate the query relations for each valid node.
+            refNode_sources: The sources of the reference nodes.
+            probs: The probabilities for query time given the reference nodes.
+            refEdges: The reference nodes.
+            valid_sample_idx: The local indices of valid samples.
+            query_intervals: The query intervals.
+            query_samples: The query samples.
+            final_preds: The final predictions.
+        '''
         random_walk_res, input_intervals_dict = self._initialize_walk_res(idx_ls, mode)
         query_edges, query_intervals = self._load_queries(idx_ls)
-        query_rel_ori = [query[1] for query in query_edges]
+        query_rel = [query[1] for query in query_edges]
 
-        if mode == 'Test' and not self.call_by_TEKG:
+        if mode == 'Test' and (not self.call_by_TEKG):
             for i, data_idx in enumerate(idx_ls):
                 if data_idx in input_intervals_dict:
                     query_intervals[i] = input_intervals_dict[data_idx].tolist()
 
         # For interval-based datasets, we don't need to return the query samples.
         query_samples = None
-        output = self._process_graph(idx_ls, random_walk_res, mode, query_rel_ori)
-        valid_sample_idxs, query_rel_dummy, refNode_sources, merged_valid_rule_idx, refEdges, final_preds = output
+        output = self._process_walk_res(idx_ls, random_walk_res, mode, query_rel)
+        valid_sample_idx, query_rel_dummy, refNode_sources, probs, refNodes, final_preds = output
 
-        return query_rel_ori, query_rel_dummy, refNode_sources, merged_valid_rule_idx, refEdges, valid_sample_idxs, query_intervals, query_samples, final_preds
+        return query_rel, query_rel_dummy, refNode_sources, probs, refNodes, valid_sample_idx, query_intervals, query_samples, final_preds
 
 
 
@@ -358,7 +383,7 @@ class TEKG_timestamp_fast_ver(Base):
         Aggregated probabilities for the event. This implementation simply takes the mean of the probabilities,
         but you might choose a different strategy based on your application's specifics.
         """
-        if mode == 'Train' and self.option.prob_type_for_training == 'max':
+        if mode == 'Train' and self.option.prob_selection_for_training == 'max':
             # For training, you might prefer the mean to smooth out the data
             return np.max(probs)
         else:
@@ -384,7 +409,7 @@ class TEKG_timestamp_fast_ver(Base):
         if self.option.shift:
             cur_path += '_time_shifting'
 
-        cur_path += '/samples/' + self.data['dataset'] + self.file_suffix
+        cur_path += '/samples/' + self.data['dataset']
 
         if inverse and self.option.shift:
             cur_path += 'fix_ref_time_'
@@ -596,16 +621,14 @@ class TEKG_timestamp_fast_ver(Base):
         # if not sample_dict or not sample_inv_dict:
         #     return None
 
-        preprocessor = Data_preprocessor()
-
-        # Assuming create_inputs_v4 and other required methods are defined elsewhere within the class
+        preprocessor = Data_Processor()
         input_edge_probs = preprocessor.create_inputs_timestamp_ver(sample_dict, sample_inv_dict, None, self.data['pattern_ls'], self.data['timestamp_range'], 
-                                             self.data['num_rel']//2, self.data['stat_res'], mode=mode,
-                                             dataset=self.data['dataset'], file_suffix=self.file_suffix, 
-                                             flag_compression = False, flag_write = False, 
-                                             flag_time_shifting = self.option.shift,
-                                             pattern_ls_fkt = pattern_ls_fkt,
-                                             stat_res_fkt = stat_res_fkt, shift_ref_time=None, flag_rm_seen_timestamp=True)
+                                                                    self.data['num_rel']//2, self.data['stat_res'], mode=mode,
+                                                                    dataset=self.data['dataset'],
+                                                                    flag_compression = False, flag_write = False, 
+                                                                    flag_time_shifting = self.option.shift,
+                                                                    pattern_ls_fkt = pattern_ls_fkt,
+                                                                    stat_res_fkt = stat_res_fkt, shift_ref_time=None, flag_rm_seen_timestamp=True)
 
         if len(input_edge_probs) == 0:
             return None
@@ -782,43 +805,97 @@ class TEKG(Base):
 
 
     def _select_probability(self, probs, mode, min_prob=1e-4):
-        # min_prob: set minimum probability that make the training more stable.
-        if mode == 'Train' and self.option.prob_type_for_training == 'max':
-            return max(min_prob, max(probs))
-        return max(min_prob, np.mean(probs))
+        '''
+        Select the probability for the current reference events (There might be multiple rules satisfied).
+        '''
+        if mode == 'Train':
+            # min_prob: set minimum probability that make the training more stable.
+            if self.option.prob_selection_for_training == 'max':
+                return max(min_prob, max(probs))
+            else:
+                return max(min_prob, np.mean(probs))
+        else:
+            probs = np.array(probs) # shape: (num_rules, num_timestamp)
+            return np.mean(probs, axis=0)
       
 
-    def _update_event_probabilities(self, probs, idx_sample, prob_dict, num_entity, TEKG_nodes_aug, TEKG_nodes_idx_aug, mode):
+    def _calculate_dist_score(self, extra_data, all_idx):
+        '''
+        Given all the related indices, we calculate the score for current dist.
+        '''
+        data_idx, edge_idx, idx_query_time, idx_event_pos, idx_ref_time = all_idx
+        final_state_vec, attn_refType = extra_data
+
+        # We first select corresponding final state vector.
+        selected_final_prob = final_state_vec[str((data_idx, idx_event_pos, edge_idx))]
+        selected_attn_refType = attn_refType[str(data_idx)]
+        
+        # attn_refType: [tqs, tqe] X [(last_ts, last_te), (first_ts, first_te), (last_event, first_event)]
+        score = selected_final_prob * selected_attn_refType[3*idx_query_time + 2][1-idx_event_pos] \
+                                    * selected_attn_refType[3*idx_query_time + 1-idx_event_pos][idx_ref_time]
+        return score
+
+
+    def _obtain_edge_idx_in_TEKG(self, edge, TEKG_nodes, TEKG_nodes_idx, num_entity, idx_event_pos):
+        '''
+        Given an edge, obtain its idex in TEKG.
+        '''
+        edge_idx = TEKG_nodes_idx[TEKG_nodes.tolist().index(edge)]
+
+        # For the first event, we will do a reverse walk. Thus, we need to find the inv node in TEKG.
+        if idx_event_pos == 0:
+            edge_idx += num_entity//2
+        return edge_idx
+
+
+    def _update_event_probabilities(self, probs, idx_sample, data_idx, walk_res, num_entity, TEKG_nodes_aug, TEKG_nodes_idx_aug, mode, 
+                                    stage, final_preds, extra_data):
+        '''
+        Given the walk res, update the probs for the current sample.
+        '''
         flag_valid = 0
-        ref_event_idx = []
+        ref_event_idx = {}
+        preds = [0. for _ in range(1 + int(self.option.flag_interval))]
         for idx_event_pos in [0, 1]:
-            # Format: prob_dict[idx_event_pos][str_tuple(edge)][2*idx_query_time + idx_ref_time]
-            for edge in prob_dict[str(idx_event_pos)]:
+            # Format: walk_res[idx_event_pos][str_tuple(edge)][2*idx_query_time + idx_ref_time]
+            for edge in walk_res[str(idx_event_pos)]:
                 # The format we used in walk res is different from the original one.
-                edge = eval(edge) if mode == 'Train' else edge
-                edge_reformatted = [edge[j] for j in [0,1,4,2,3]]
-                edge_idx = TEKG_nodes_idx_aug[TEKG_nodes_aug.tolist().index(edge_reformatted)]
-                # For the first event, we will do a reverse walk. Thus, we need to find the inv node in TEKG.
-                if idx_event_pos == 0:
-                    edge_idx += num_entity//2
+                edge_reformatted = [eval(edge)[j] for j in [0,1,4,2,3]]
+
+                # Obtain the edge index in TEKG.
+                edge_idx = self._obtain_edge_idx_in_TEKG(edge_reformatted, TEKG_nodes_aug, TEKG_nodes_idx_aug, num_entity, idx_event_pos)
 
                 for idx_query_time in [0, 1]:
                     for idx_ref_time in [0, 1]:
-                        cur_probs = [item[0] for item in prob_dict[str(idx_event_pos)][str_tuple(edge)][str(2*idx_query_time + idx_ref_time)]]
+                        cur_probs = [item[0] for item in walk_res[str(idx_event_pos)][edge][str(2*idx_query_time + idx_ref_time)]]
                         if len(cur_probs) == 0:
                             continue
-                        
+ 
+                        selected_prob = self._select_probability(cur_probs, mode)
+
                         # Use a composite index here to simplify the coding.
                         # When building the model, we first calculate the last event and then the first event, first tqs and then tqe.
-                        idx_complete = 4*idx_query_time + 2*(1 - idx_event_pos) + idx_ref_time
-                        probs[idx_sample][idx_complete][edge_idx] = self._select_probability(cur_probs, mode)
-                        ref_event_idx.append([idx_sample, idx_complete, edge_idx])
+                        idx_complete = 4*idx_query_time + 2*(1-idx_event_pos) + idx_ref_time
+                        
+                        if mode == 'Train':
+                            # No need to update the probabilities for inference. Instead we use an online algorithm.
+                            probs[idx_sample][idx_complete][edge_idx] = selected_prob
+                        else:    
+                            if stage == 'obtain state vec':
+                                ref_event_idx[(data_idx, idx_event_pos, edge_idx)] = 0.
+                            else:
+                                # During inference, we calculate the time prediction in an online manner.
+                                all_idx = [data_idx, edge_idx, idx_query_time, idx_event_pos, idx_ref_time]
+                                preds[idx_query_time] += selected_prob * self._calculate_dist_score(extra_data, all_idx)
                         flag_valid = 1
+        
+        if flag_valid and stage == 'time prediction':                
+            final_preds.append(preds)
 
         return flag_valid, ref_event_idx
 
 
-    def _format_outputs(self, idx_ls, query_edges, TEKG_nodes, TEKG_nodes_idx, num_entity, prob_dict, mode):
+    def _format_outputs(self, idx_ls, query_edges, TEKG_nodes, TEKG_nodes_idx, num_entity, walk_res, mode, stage, extra_data):
         '''
         Format the outputs for the current batch.
         '''
@@ -839,23 +916,33 @@ class TEKG(Base):
         # Notice that entity in TEKG is event in TKG.
         # idx_complete = 4*idx_query_time + 2*(1-idx_event_pos) + idx_ref_time
         num_cases = 8 if self.option.flag_interval else 2
-        probs = [[[1./len(self.data['timestamp_range']) for _ in range(num_entity)] for _ in range(num_cases)] for _ in range(len(idx_ls))]
-    
-        valid_sample_idx, valid_ref_event_idx = [], [[], [], [], []]
+        if mode == 'Train':
+            probs = [[[1./len(self.data['timestamp_range']) for _ in range(num_entity)] for _ in range(num_cases)] for _ in range(len(idx_ls))]
+        else:
+            probs = [[[0. for _ in range(num_entity)] for _ in range(num_cases)] for _ in range(len(idx_ls))]
+
+        # For test mode step 2, we only need to calculate the time prediction for each sample.
+        if stage == 'time prediction':
+            final_preds = []
+        else:
+            final_preds = None
+
+        valid_sample_idx, valid_ref_event_idx = [], {}
         for (idx, data_idx) in enumerate(idx_ls):
-            flag_valid = 0
-            if mode == 'Test':
-                data_idx -= self.data['num_samples_dist'][1]
-            if data_idx not in prob_dict:
+            if data_idx not in walk_res:
                 continue
 
-            flag_valid, ref_event_idx = self._update_event_probabilities(probs, idx, prob_dict[data_idx], num_entity, TEKG_nodes, TEKG_nodes_idx, mode)
+            flag_valid, ref_event_idx = self._update_event_probabilities(probs, idx, data_idx, walk_res[data_idx], num_entity, TEKG_nodes, TEKG_nodes_idx, mode, 
+                                                                         stage, final_preds, extra_data)
 
             if flag_valid:
                 valid_sample_idx.append(idx)
-                valid_ref_event_idx += ref_event_idx
+                valid_ref_event_idx.update(ref_event_idx)
 
-        return qq, hh, tt, probs, valid_sample_idx, valid_ref_event_idx
+        if stage == 'time prediction' and len(final_preds)>0:
+            final_preds = self._merge_array_inside(final_preds)
+
+        return qq, hh, tt, probs, valid_sample_idx, valid_ref_event_idx, final_preds
 
 
     def _obtain_refNode_index(self, refEdges, refNode_sources, batch_nodes, batch_nodes_idx, num_entity):
@@ -893,11 +980,33 @@ class TEKG(Base):
         return refNode_index
 
 
-    def create_graph(self, idx_ls, mode):
+    def create_graph(self, idx_ls, mode, stage=None, extra_data=None):
         '''
         Create the TEKG in batch.
+        For test mode, we have two steps: 1) calculate final state vec only; 2) predict time given the final state vec.
 
-        Example: YAGO dataset train_idx: 91
+        Parameters:
+            idx_ls: The list of indices for which to generate the TEKG.
+            mode: The mode of operation ('Train' or  'Valid' or 'Test').
+            stage: The stage of operation ('obtain state vec' or 'time prediction').
+            extra_data: The extra data for the current batch (final_state_vec, attn_refType).
+        
+        Returns:
+            qq: The query relations.
+            hh: The head nodes.
+            tt: The tail nodes.
+            connectivity_rel: The connectivity matrix for the relations.
+            connectivity_TR: The connectivity matrix for the temporal relations.
+            probs: The probabilities for query time given the reference nodes.
+            valid_local_idx: The local indices of valid samples.
+            valid_ref_idx: The indices of valid reference nodes.
+            inputs_for_enhancement: The inputs for state vector enhancement.
+            input_samples: The input samples.
+            final_preds: The final predictions.
+        
+
+        We show an example TEKG: 
+        YAGO dataset train_idx: 91
         Local TEKG:
         Node 0: [[ 216    7  388 2012 2012]
         Node 1: [ 217   10  216 9999 9999]
@@ -924,11 +1033,14 @@ class TEKG(Base):
         first event: node 3    last event: node 2
         Note: we need to find the inv node in TEKG for the first event.
         '''
+        assert mode in ['Train', 'Valid', 'Test']
+        assert stage in [None, 'obtain state vec', 'time prediction']
+
         connectivity_rel = self.data['connectivity_rel']
         connectivity_TR = self.data['connectivity_TR']
         TEKG_nodes = self.data['TEKG_nodes']
         TEKG_nodes_idx = self.data['TEKG_nodes_idx']
-        prob_dict = self.data['random_walk_res']
+        walk_res = self.data['random_walk_res']
 
         flag_use_batch_graph = False
         if (connectivity_rel is None) or (connectivity_TR is None) or (TEKG_nodes is None):
@@ -955,21 +1067,22 @@ class TEKG(Base):
             connectivity_TR = self._build_connectivity_TR(batch_nodes, batch_nodes_idx, num_entity, self.data['num_TR'])
 
         
-        if prob_dict is None:
-            prob_dict, input_intervals_dict = self._initialize_walk_res(idx_ls, mode)
+        if walk_res is None:
+            walk_res, input_intervals_dict = self._initialize_walk_res(idx_ls, mode)
 
             if mode == 'Test':
                 for i, data_idx in enumerate(idx_ls):
                     if data_idx in input_intervals_dict:
                         input_intervals[i] = input_intervals_dict[data_idx].tolist()
 
-
-        # For probs and valid_ref_event_idx, we use a composite index here to simplify the coding.
+   
+        # For probs and valid_refNode_idx, we use a composite index here to simplify the coding.
         # idx_complete = 4*idx_query_time + 2*(1-idx_event_pos) + idx_ref_time
-        qq, hh, tt, probs, valid_sample_idx, valid_ref_event_idx = self._format_outputs(idx_ls, query_nodes, batch_nodes, batch_nodes_idx, num_entity, prob_dict, mode)
-        input_samples, final_preds = None, None
+        qq, hh, tt, probs, valid_sample_idx, valid_refNode_idx, final_preds = self._format_outputs(idx_ls, query_nodes, batch_nodes, batch_nodes_idx, num_entity, 
+                                                                                                     walk_res, mode, stage, extra_data)
+        # For interval-based datasets, we don't need to return the query samples.
+        input_samples = None
 
-        
         inputs_for_enhancement = []
         if self.option.flag_state_vec_enhancement:
             # Use fast ver graph to prepare data.
@@ -996,4 +1109,4 @@ class TEKG(Base):
             inputs_for_enhancement = [query_rels, random_walk_res, refNode_index]
        
 
-        return qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, valid_ref_event_idx, inputs_for_enhancement, input_intervals, input_samples, final_preds
+        return qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, valid_refNode_idx, inputs_for_enhancement, input_intervals, input_samples, final_preds

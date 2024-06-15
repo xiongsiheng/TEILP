@@ -1,7 +1,7 @@
 import os
+import sys
 import argparse
 import time
-import sys
 import tensorflow as tf
 import numpy as np
 from model import Learner
@@ -20,17 +20,17 @@ def main():
     parser.add_argument('--test', default=False, action="store_true")
     parser.add_argument('--from_model_ckpt', default=None, type=str)
     parser.add_argument('--dataset', default=None, type=str)
-    parser.add_argument('--shift', default=0, type=int)
+    parser.add_argument('--shift', default=False, type=bool)   # whether use time-shifting setting  (Todo: fix issues)
 
     d = vars(parser.parse_args())
     option = Option(d)
     option.tag = time.strftime("%y-%m-%d-%H-%M")
     option.exps_dir = '../exps/'
     
-    # We consider let rel and TR use different states. Found not necessary.
+    # We consider using different states for relation and temporal relation (TR). Found not necessary.
     option.different_states_for_rel_and_TR = False
     
-    # We consider only using the shallow layers to accelerate the training.
+    # We consider only using the shallow layers to accelerate the training and inference.
     # Set flag_acceleration to False to use the RNN structure.
     option.flag_acceleration = True
     
@@ -41,14 +41,18 @@ def main():
     option.flag_use_dur = False
 
     # We enhance the RNN structure by adding the shallow layers.
+    # When flag_acceleration is True, we only use the shallow layers.
+    # When both flag_acceleration and flag_state_vec_enhancement are False, we only use the RNN structure.
+    # When flag_acceleration is False and flag_state_vec_enhancement is True, we use both the RNN and shallow layers.
     option.flag_state_vec_enhancement = True
     
-    # If an event satisfies multiple rules, choose the max or mean probability during training.
+    # If an event satisfies multiple rules, choose the max or mean probability of the query time during training.
     # During inference, we always choose the mean probability since we don't have the prior.
-    option.prob_type_for_training = ['max', 'mean'][0]
+    option.prob_selection_for_training = ['max', 'mean'][0]
     
     # If we use both RNN and shallow layers, it is better to sample the training data for efficiency.
-    option.num_samples_per_rel = -1 if option.flag_acceleration else 500
+    # option.num_samples_per_rel = -1 means no sampling for the training data.
+    option.num_samples_per_rel = -1 if option.flag_acceleration else 200
 
 
     # Setting for the model. No need to change.
@@ -68,13 +72,14 @@ def main():
     tf.logging.set_verbosity(tf.logging.ERROR)
 
     
-    # For the first time, set process_walk_res=True to generate the walk results.
-    # After that, set it to False to load the walk results directly.
-    # Once we change the setting, we need to re-generate the walk results.
-    processor = Data_preprocessor()
-    data = processor.prepare_data(option, process_walk_res=True)
+    # For the first time, set preprocess_walk_res=True to preprocess and save the probabilities of query time.
+    # After that, set it to False to load the results directly.
+    # However, once we change the setting, we need to re-generate the results.
+    processor = Data_Processor()
+    data = processor.prepare_data(option, preprocess_walk_res=True)
 
 
+    # Build the model.
     learner = Learner(option, data)
     print("Learner built.")
 
@@ -83,7 +88,8 @@ def main():
     config.gpu_options.allow_growth = False
     config.log_device_placement = False
     config.allow_soft_placement = True
-    
+
+
     with tf.Session(config=config) as sess:
         tf.set_random_seed(option.seed)
         sess.run(tf.global_variables_initializer())
@@ -102,9 +108,9 @@ def main():
             experiment.close_log_file()
 
         if option.test:
-            # Prepare for testing
+            # Prepare for testing:
             # In acceleration mode, we save the rule scores.
-            # In normal mode, we save the state vectors for test data.
+            # In normal mode, we save the state vectors and attention scores.
             print("Prepare for testing...")
             if option.flag_acceleration:
                 experiment.save_rule_scores()
@@ -112,22 +118,17 @@ def main():
                 experiment.save_state_vectors(data['test_idx_ls'])
 
 
-    if option.test:        
+    if option.test:
+        print("Start testing...")        
         # After preparing, we don't need to load the model. Instead, we use a distributed online strategy to accelerate the inference.
         experiment = Experiment(None, None, option, None, data)
-        print("Experiment created.")
-
-        if option.flag_acceleration:
-            num_batches = 24
-            idx_ls = split_list_into_batches(data['test_idx_ls'], num_batches=num_batches)
-            outputs = Parallel(n_jobs=num_batches)(
-                    delayed(experiment.test)(idx_batch) for idx_batch in idx_ls
-                    )
-        else:
-            # Todo: Implement the distributed online strategy for the normal mode.
-            pass
-
-
+        
+        num_batches = 24
+        idx_ls = split_list_into_batches(data['test_idx_ls'], num_batches=num_batches)
+        outputs = Parallel(n_jobs=num_batches)(
+                delayed(experiment.test)(idx_batch) for idx_batch in idx_ls
+                )
+      
         eval_aeIOU, eval_TAC = [], []
         for output in outputs:
             eval_aeIOU += output[0]

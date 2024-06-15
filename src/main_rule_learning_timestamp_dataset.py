@@ -50,11 +50,11 @@ def main():
     option.flag_ruleLen_split_ver = False  # learn the rules with different lengths separately (Todo: fix issues)
     option.flag_use_dur = False  # use duration information (Todo: fix issues)
     option.flag_state_vec_enhance = False
-    option.prob_type_for_train = ['max', 'mean'][0]  # given a rule, the probability of the rule is the max or mean of the probabilities of the samples
+    option.prob_selection_for_training = ['max', 'mean'][0]  # given a rule, the probability of the rule is the max or mean of the probabilities of the samples
 
     os.environ["CUDA_VISIBLE_DEVICES"] = option.gpu
 
-    processor = Data_preprocessor()
+    processor = Data_Processor()
     data = processor.prepare_data(option)
 
 

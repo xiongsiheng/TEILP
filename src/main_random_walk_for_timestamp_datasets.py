@@ -208,4 +208,4 @@ else:
 
 # Todo: Check process_random_walk_with_sampling_results for timestamp datasets.
 summarizer = Rule_summarizer()
-summarizer.process_random_walk_with_sampling_results(dataset, mode='Train', num_rel=num_rel, file_suffix='_', file_paths=file_paths, num_workers=24)
+summarizer.process_random_walk_with_sampling_results(dataset, mode='Train', num_rel=num_rel, file_paths=file_paths, num_workers=24)

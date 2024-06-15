@@ -480,7 +480,7 @@ class Learner(object):
         '''
         Use shallow layers only to accelerate the training process.
         '''
-        self.query_rels = tf.placeholder(tf.int32, [None])   # (dummy_batch_size) num_relevant_events in a batch
+        self.query_rel_dummy = tf.placeholder(tf.int32, [None])   # (dummy_batch_size) num_relevant_events in a batch
         self.refNode_source = tf.placeholder(tf.float32, [None, None])  # show where the refNode comes from (batch_size, dummy_batch_size)
         
         if self.flag_ruleLen_split:
@@ -494,7 +494,7 @@ class Learner(object):
 
         # attention vec for different rules given the query relation
         self.attn_rule_embed = tf.Variable(np.random.randn(self.num_query, self.num_rule), dtype=tf.float32, name="attn_rule_embed")
-        attn_rule = tf.nn.embedding_lookup(self.attn_rule_embed, self.query_rels)
+        attn_rule = tf.nn.embedding_lookup(self.attn_rule_embed, self.query_rel_dummy)
         attn_rule = tf.nn.softmax(attn_rule, axis=1)
         self.attn_rule = attn_rule  # shape: (dummy_batch_size, num_rule)
         
@@ -502,7 +502,7 @@ class Learner(object):
         # [tqs, tqe] X [(first_event_ts, first_event_te), (last_event_ts, last_event_te), (first_event, last_event)]
         self.attn_refType_embed = [tf.Variable(self._random_uniform_unit(self.num_query, 2), dtype=tf.float32, name='attn_refType_embed_{}'.format(i)) 
                                    for i in range(3 * (int(self.flag_int) + 1))]
-        attn_refType = [tf.nn.embedding_lookup(embed, self.query_rels) for embed in self.attn_refType_embed]
+        attn_refType = [tf.nn.embedding_lookup(embed, self.query_rel_dummy) for embed in self.attn_refType_embed]
         attn_refType = [tf.nn.softmax(x, axis=1) for x in attn_refType] # each element (dummy_batch_size, 2)
         self.attn_refType = attn_refType
     
@@ -528,10 +528,10 @@ class Learner(object):
                 self.final_pred.append(tf.matmul(self.refNode_source, probs) / (tf.matmul(self.refNode_source, norm)) + 1e-20)
 
 
-        # scaling the loss to make the learning more stable.
-        if self.loss_scaling_factor is not None:
+        # scaling the prob to make the learning more stable.
+        if self.prob_scaling_factor is not None:
             for i in range(int(self.flag_int)+1):
-                self.final_pred[i] = self._final_prob_scalling(self.pred[i])
+                self.final_pred[i] = self._final_prob_scalling(self.final_pred[i])
 
 
         # calculate the loss
@@ -586,17 +586,17 @@ class Learner(object):
         return graph_output
 
 
-    def _run_comp_graph_fast_ver(self, sess, query_rels, refNode_source, res_random_walk, to_fetch):
+    def _run_comp_graph_fast_ver(self, sess, query_rel_dummy, refNode_source, probs, to_fetch):
         feed = {}
-        feed[self.query_rels] = query_rels
+        feed[self.query_rel_dummy] = query_rel_dummy
         feed[self.refNode_source] = refNode_source
 
         num_cases = 8 if self.flag_int else 2
-        random_walk_prob = np.zeros((len(query_rels), num_cases, self.num_rule)) 
-        random_walk_ind = np.zeros((len(query_rels), 2, self.num_rule))  # We only need to distinguish the cases for first or last event.
+        random_walk_prob = np.zeros((len(query_rel_dummy), num_cases, self.num_rule)) 
+        random_walk_ind = np.zeros((len(query_rel_dummy), 2, self.num_rule))  # We only need to distinguish the cases for first or last event.
         for i in range(num_cases):
-            if len(res_random_walk[i]) > 0:
-                x, y, p = res_random_walk[i][:, 0].astype(int), res_random_walk[i][:, 1].astype(int), res_random_walk[i][:, 2]
+            if len(probs[i]) > 0:
+                x, y, p = probs[i][:, 0].astype(int), probs[i][:, 1].astype(int), probs[i][:, 2]
                 random_walk_prob[x, i, y] = p
                 if i in [0, num_cases-1]:
                     random_walk_ind[x, min(i, 1), y] = 1
@@ -631,24 +631,47 @@ class Learner(object):
 
 
     def get_state_vec(self, sess, inputs):
+        '''
+        Get the state vector for each sample. We split the inference process into two stages (1.obtain state vec; 2.time prediction) for acceleration.
+        '''
         # For fasr version, we don't need to get the state vector.
         assert not self.flag_acceleration
 
-        qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, inputs_for_enhancement = inputs
+        # Run the computation graph and get the results.
+        qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, inputs_for_enhancement, valid_ref_idx, batch_idx_ls = inputs
         to_fetch = [self.state_vec_recorded, self.attn_refType]
         fetched = self._run_comp_graph(sess, qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, inputs_for_enhancement, to_fetch)
-        
         state_vec_recorded, attn_refType = fetched[0], fetched[1]
-        
-        # Save the state vector and predict the time in parallel.
-        state_vec_recorded_selected = []
-        for idx_sample, idx_batch_node in zip():
-            state_vec_recorded_selected.append(state_vec_recorded[idx_sample, idx_batch_node])
-        
-        return state_vec_recorded_selected, attn_refType
+
+        # Prepare the output.
+        selected_state_vec = {}
+        for cur_ref_idx in valid_ref_idx:
+            # cur_ref_idx format: (idx_sample, idx_event_pos, idx_event)
+            # state_vec_recorded: [vec for last event, vec for first event]
+            cur_state = state_vec_recorded[1-cur_ref_idx[1]]
+
+            # relative pos in the batch
+            fn = lambda ls1, ele1, ls2: ls2.index(ls1.index(ele1))
+            pos = [fn(batch_idx_ls, cur_ref_idx[0], valid_sample_idx), cur_ref_idx[2]]
+
+            selected_state_vec[str(cur_ref_idx)] = cur_state[tuple(pos)].tolist()
+
+        selected_attn_refType = {}
+        for (i, idx) in enumerate(valid_sample_idx):
+            cur_global_idx = batch_idx_ls[idx]
+            selected_attn_refType[cur_global_idx] = [attn[i, :].tolist() for attn in attn_refType]
+
+        output = {}
+        output['final_state_vec'] = selected_state_vec
+        output['attn_refType'] = selected_attn_refType
+
+        return output
 
 
     def predict(self, sess, inputs):
+        '''
+        The original predict function. We do not use it due to the inefficiency.
+        '''
         to_fetch = [self.final_pred]
         if self.flag_acceleration:
             qq, refNode_source, res_random_walk = inputs
