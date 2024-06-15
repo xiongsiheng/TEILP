@@ -39,6 +39,8 @@ class Experiment():
     def _calculate_output(self, myTEKG, run_fn, batch_idx_ls, mode, stage, flag_rm_seen_ts, useful_data):
         '''
         Calculate the output of the model for a batch of data.
+        There are three modes: 'Train', 'Valid', 'Test'.
+        For validation and testing, we have two stages: 'obtain state vec' and 'time prediction'.
         '''
         train_nodes, timestamp_range, pred_dur_dict, final_state_vec, attn_refType = useful_data
         extra_data = [final_state_vec, attn_refType] if stage == 'time prediction' else None
@@ -98,6 +100,10 @@ class Experiment():
 
 
     def _rm_seen_time(self, flag_rm_seen_ts, valid_sample_idx, input_samples, prob_t, train_nodes, timestamp_range):
+        '''
+        Given the triple (subject, relation, object), remove the seen timestamps in the training set during inference.
+        Only used for timestamp-based datasets.
+        '''
         if flag_rm_seen_ts:
             input_samples = input_samples[valid_sample_idx]
             prob_t_new = []
@@ -117,6 +123,10 @@ class Experiment():
 
 
     def _adjust_preds_based_on_dur(self, preds, batch_idx_ls, valid_sample_idx, pred_dur_dict, qq):
+        '''
+        Adjust the predictions based on the duration information.
+        Only used for interval-based datasets.
+        '''
         if self.option.flag_use_dur:
             pred_ts, pred_te = preds[0], preds[1]
             pred_dur = []
@@ -138,6 +148,9 @@ class Experiment():
 
 
     def _load_saved_final_state(self, save_path):
+        '''
+        Load the saved final state vectors and attention scores.
+        '''
         with open(save_path) as json_file:
             res = json.load(json_file)
 
