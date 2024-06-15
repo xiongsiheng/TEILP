@@ -15,7 +15,6 @@ class Learner(object):
         self.thr = option.thr
         self.dropout = option.dropout
 
-        # self.num_entity = data['num_entity']  # dynamic
         self.num_relation = data['num_rel']
         self.num_TR = data['num_TR']
         self.num_rule = option.num_rule
@@ -36,7 +35,7 @@ class Learner(object):
 
         # To make the learning more stable, we scale the final prob dynamically.
         # If the prob is greater than self.prob_scaling_factor[0], we scale it by self.prob_scaling_factor[1].
-        self.prob_scaling_factor = [0.1, 0.5]  # Fast ver: YAGO, wiki  [0.04, 0.1]
+        self.prob_scaling_factor = [0.1, 0.5]  # YAGO, wiki
 
         np.random.seed(self.seed)
 
