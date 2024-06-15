@@ -44,9 +44,10 @@ class Experiment():
         extra_data = [final_state_vec, attn_refType] if stage == 'time prediction' else None
         
         if self.option.flag_acceleration:
-            # query_rel_dummy: [] * dummy_batch_size (num_events);  
-            # refNode_source: [(dummy_batch_size,)] * batch_size;
-            # probs: (num_rules_in_total_for_different_events, 2); [event_idx, rule_idx]
+            # Variables used by the fast-ver model:
+            #       query_rel_dummy: [] * dummy_batch_size (num_nodes);  
+            #       refNode_source: [(dummy_batch_size,)] * batch_size;
+            #       probs: (num_rules_in_total_for_different_nodes, 3); [event_idx, rule_idx, prob]
             qq, query_rel_dummy, refNode_source, probs, _, valid_sample_idx, \
                             input_intervals, input_samples, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode)
         else:
