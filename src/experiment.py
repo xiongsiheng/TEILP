@@ -63,7 +63,7 @@ class Experiment():
         gts = np.array(input_intervals)
         
         # We first random guess the time.
-        preds = [[1900, 2000] for _ in range(len(batch_idx_ls))]
+        preds = [[1900, 2000] for _ in range(len(batch_idx_ls))]  # YAGO and wiki
         preds = np.array(preds)
         
         if mode == "Train":
@@ -85,7 +85,7 @@ class Experiment():
             if stage == 'obtain state vec':
                 if len(valid_sample_idx) == 0:
                     # all samples are invalid (no walk can be found)
-                    return [], [], []
+                    return {}, [], []
           
                 inputs = [qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, inputs_for_enhancement, valid_refNode_idx, batch_idx_ls]
                 output = run_fn(self.sess, inputs)
@@ -162,12 +162,15 @@ class Experiment():
         '''
         Load the saved final state vectors and attention scores.
         '''
+        if not os.path.exists(save_path):
+            return None, None, None
+        
         with open(save_path) as json_file:
             res = json.load(json_file)
 
-        final_state_vec = res['final_state_vec']
-        attn_refType = res['attn_refType']
-        batch_idx_ls = res['batch_idx']
+        final_state_vec = res['final_state_vec'] if 'final_state_vec' in res else None
+        attn_refType = res['attn_refType'] if 'attn_refType' in res else None
+        batch_idx_ls = res['batch_idx'] if 'batch_idx' in res else None
         return final_state_vec, attn_refType, batch_idx_ls
 
 

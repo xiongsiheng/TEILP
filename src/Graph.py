@@ -841,6 +841,9 @@ class TEKG(Base):
         data_idx, edge_idx, idx_query_time, idx_event_pos, idx_ref_time = all_idx
         final_state_vec, attn_refType = extra_data
 
+        if final_state_vec is None or attn_refType is None:
+            return 0.
+        
         # We first select corresponding final state vector.
         selected_final_prob = final_state_vec[str((data_idx, idx_event_pos, edge_idx))]
         selected_attn_refType = attn_refType[str(data_idx)]
