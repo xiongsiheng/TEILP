@@ -174,7 +174,7 @@ class Experiment():
         return final_state_vec, attn_refType, batch_idx_ls
 
 
-    def running_model(self, model, run_fn, batch_size, idx_ls, mode, stage, flag_rm_seen_ts):
+    def running_model(self, model, run_fn, idx_ls, mode, stage, flag_rm_seen_ts):
         '''
         Run the mode according to the function and settings.
         '''
@@ -183,10 +183,10 @@ class Experiment():
         pred_dur_dict = self.data['pred_dur'] if self.option.flag_use_dur else None
         
         # Split the index list into batches.       
-        idx_ls = split_list_into_batches(idx_ls, batch_size=batch_size)
+        idx_ls = split_list_into_batches(idx_ls, batch_size=self.option.batch_size)
         
         # Prepare all batches to find the global batch idx (if needed).
-        all_batch_ls = split_list_into_batches(self.idx_ls_dict[mode], batch_size=batch_size)
+        all_batch_ls = split_list_into_batches(self.idx_ls_dict[mode], batch_size=self.option.batch_size)
 
         desc = stage if stage is not None else mode
 
@@ -239,7 +239,7 @@ class Experiment():
                 return epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE
 
 
-    def one_epoch(self, mode, total_idx=None, batch_size=32, stage=None):
+    def one_epoch(self, mode, total_idx=None, stage=None):
         assert mode in ["Train", "Valid", "Test"]
         assert stage in ['obtain state vec', 'time prediction', None]  # We only use stage during inference.
 
@@ -265,32 +265,29 @@ class Experiment():
         if mode == "Train":
             random.shuffle(idx_ls)
      
-        return self.running_model(myTEKG, run_fn, batch_size, idx_ls, mode, stage, flag_rm_seen_ts)
+        return self.running_model(myTEKG, run_fn, idx_ls, mode, stage, flag_rm_seen_ts)
 
 
-    def one_epoch_train(self, total_idx=None):
-        batch_size = 8 if self.option.flag_acceleration else 4
-        
+    def one_epoch_train(self, total_idx=None):       
         if total_idx is None:
             # Randomly sample the training data if the option is choosen.
             processor = Data_Processor()
             total_idx = processor._trainig_data_sampling(self.data['train_nodes'], self.data['num_rel'], num_sample_per_rel=self.option.num_samples_per_rel)
 
-        loss = self.one_epoch("Train", total_idx=total_idx, batch_size=batch_size)
+        loss = self.one_epoch("Train", total_idx=total_idx)
         self.train_stats.append([loss])
 
 
     def one_epoch_valid(self, total_idx=None):
-        batch_size = 8 if self.option.flag_acceleration else 4
-        eval1 = self.one_epoch("Valid", total_idx=total_idx, batch_size=batch_size)
+        stage = None if self.option.flag_acceleration else 'time prediction'
+        eval1 = self.one_epoch("Valid", total_idx=total_idx, stage=stage)
         self.valid_stats.append([eval1])
         self.best_valid_eval1 = max(self.best_valid_eval1, np.mean(eval1[0]))
 
 
     def one_epoch_test(self, total_idx=None):
-        batch_size = 8 if self.option.flag_acceleration else 4
         stage = None if self.option.flag_acceleration else 'time prediction'
-        eval1 = self.one_epoch("Test", total_idx=total_idx, batch_size=batch_size, stage=stage)
+        eval1 = self.one_epoch("Test", total_idx=total_idx, stage=stage)
         self.test_stats.append([eval1])
         return eval1
 
@@ -348,8 +345,8 @@ class Experiment():
                 json.dump(output, file)
 
 
-    def save_state_vectors(self, total_idx):
-        self.one_epoch("Test", total_idx=total_idx, batch_size=4, stage='obtain state vec')
+    def save_state_vectors(self, mode, total_idx):
+        self.one_epoch(mode, total_idx=total_idx, stage='obtain state vec')
 
 
     def close_log_file(self):

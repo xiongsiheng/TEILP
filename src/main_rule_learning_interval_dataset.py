@@ -66,7 +66,7 @@ def main():
     option.max_epoch = 30 if option.flag_acceleration else 10
     option.min_epoch = 5
     option.create_log = False
-
+    option.batch_size = 8 if option.flag_acceleration else 4
 
     os.environ["CUDA_VISIBLE_DEVICES"] = option.gpu
     tf.logging.set_verbosity(tf.logging.ERROR)
@@ -115,7 +115,7 @@ def main():
             if option.flag_acceleration:
                 experiment.save_rule_scores()
             else:
-                experiment.save_state_vectors(data['test_idx_ls'])
+                experiment.save_state_vectors('Test', data['test_idx_ls'])
 
 
     if option.test:
@@ -129,7 +129,7 @@ def main():
         else:
             # For the normal mode, we already save the state vectors and attention scores for each batch.
             # Now we distribute the batches to different workers.
-            batch_ls = split_list_into_batches(data['test_idx_ls'], batch_size=4)
+            batch_ls = split_list_into_batches(data['test_idx_ls'], batch_size=option.batch_size)
             batch_idx_ls = split_list_into_batches(list(range(len(batch_ls))), num_batches=num_batches)
             idx_ls = []
             for batch_idx in batch_idx_ls:
