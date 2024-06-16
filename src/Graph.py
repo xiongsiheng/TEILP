@@ -65,7 +65,7 @@ class Base(object):
                                                                 flag_time_shift=self.option.shift, 
                                                                 show_tqdm=False, probs_normalization=True)
             query_time, prob_dict = output[0], output[1]
-            
+
         return prob_dict, query_time
 
 

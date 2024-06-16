@@ -9,7 +9,7 @@ from experiment import Experiment
 from gadgets import *
 from utlis import *
 from joblib import Parallel, delayed
-
+import itertools
 
 
 
@@ -124,7 +124,17 @@ def main():
         experiment = Experiment(None, None, option, None, data)
         
         num_batches = 24
-        idx_ls = split_list_into_batches(data['test_idx_ls'], num_batches=num_batches)
+        if option.flag_acceleration:
+            idx_ls = split_list_into_batches(data['test_idx_ls'], num_batches=num_batches)
+        else:
+            # For the normal mode, we already save the state vectors and attention scores for each batch.
+            # Now we distribute the batches to different workers.
+            batch_ls = split_list_into_batches(data['test_idx_ls'], batch_size=4)
+            batch_idx_ls = split_list_into_batches(list(range(len(batch_ls))), num_batches=num_batches)
+            idx_ls = []
+            for batch_idx in batch_idx_ls:
+                idx_ls.append(list(itertools.chain(*[batch_ls[i] for i in batch_idx])))
+               
         outputs = Parallel(n_jobs=num_batches)(
                 delayed(experiment.test)(idx_batch) for idx_batch in idx_ls
                 )
@@ -139,7 +149,6 @@ def main():
 
     
     
-
 
 
 

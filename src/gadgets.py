@@ -687,6 +687,9 @@ class Data_Processor():
             else:
                 cur_interval = nodes[data_idx - len(nodes), 3:] if data_idx >= len(nodes) else nodes[data_idx, 3:]
             
+            # Prepare the output of the function
+            input_intervals[data_idx] = cur_interval
+
             # Check if the output is empty
             if len(cur_output[cur_rel]) == 0:
                 continue
@@ -700,7 +703,6 @@ class Data_Processor():
                 continue
             
             # Prepare the output of the function
-            input_intervals[data_idx] = cur_interval
             probs[data_idx] = cur_probs
         
             if write_to_file:

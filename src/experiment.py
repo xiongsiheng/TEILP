@@ -35,6 +35,8 @@ class Experiment():
         else:
             self.metrics = ['MAE']
 
+        self.idx_ls_dict = {"Train": self.data['train_idx_ls'], "Valid": self.data['valid_idx_ls'], "Test": self.data['test_idx_ls']}
+
 
     def _calculate_output(self, myTEKG, run_fn, batch_idx_ls, mode, stage, flag_rm_seen_ts, useful_data):
         '''
@@ -56,17 +58,21 @@ class Experiment():
             qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, \
                 valid_refNode_idx, inputs_for_enhancement, input_intervals,\
                     input_samples, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode, stage, extra_data)
-    
-        if len(valid_sample_idx) == 0:
-            # all samples are invalid (no walk can be found)
-            return [], [], []
 
-
-        gts = np.array(input_intervals)[valid_sample_idx]
-        preds = []
+     
+        gts = np.array(input_intervals)
+        
+        # We first random guess the time.
+        preds = [[1900, 2000] for _ in range(len(batch_idx_ls))]
+        preds = np.array(preds)
+        
         if mode == "Train":
+            if len(valid_sample_idx) == 0:
+                # all samples are invalid (no walk can be found)
+                return [], [], []
+
             inputs = [query_rel_dummy, refNode_source, probs] if self.option.flag_acceleration else \
-                     [qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, inputs_for_enhancement]
+                     [qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, inputs_for_enhancement]        
             output = run_fn(self.sess, inputs)
 
             # # For debugging only.
@@ -76,73 +82,78 @@ class Experiment():
             #     sys.exit(0)
         else:
             # For inference, there might be different stages.
-            if stage == 'obtain state vec':  
+            if stage == 'obtain state vec':
+                if len(valid_sample_idx) == 0:
+                    # all samples are invalid (no walk can be found)
+                    return [], [], []
+          
                 inputs = [qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, inputs_for_enhancement, valid_refNode_idx, batch_idx_ls]
                 output = run_fn(self.sess, inputs)
                 output['batch_idx'] = batch_idx_ls
             else:
-                output = final_preds  # [(bacth_size, num_timestamp)] * (1 + int(flag_int))
+                useful_data = [valid_sample_idx, input_samples, train_nodes]
+                output = final_preds
 
                 # Obtain the predictions from the output.
-                if len(output[0]) == 0:
-                    # Since there is no walk for the sample, we just random guess the time.
-                    preds = [[1900, 2000] for _ in range(len(valid_sample_idx))]
-                else:
-                    for prob_t in output:
-                        # prob_t: shape: (dummy_batch_size, num_timestamp)
-                        prob_t = prob_t.reshape(-1)
+                # final_preds: [(bacth_size, num_timestamp)] * (1 + int(flag_int))
+                for (i, prob_t) in enumerate(output):
+                    if len(valid_sample_idx) > 0:
+                        prob_t = prob_t.reshape(-1)   # prob_t: (batch_size, num_timestamp)
                         prob_t = np.array(split_list_into_batches(prob_t, batch_size=len(timestamp_range)))
-                        prob_t = self._rm_seen_time(flag_rm_seen_ts, valid_sample_idx, input_samples, prob_t, train_nodes, timestamp_range)
-                        preds.append(prob_t)
-                    preds = self._adjust_preds_based_on_dur(preds, batch_idx_ls, valid_sample_idx, pred_dur_dict, qq)
-  
+
+                        preds[valid_sample_idx, i] = self._get_prediction(prob_t, timestamp_range, useful_data, flag_rm_seen_ts)
+                    
+                preds = self._adjust_preds_based_on_dur(preds, qq, pred_dur_dict, batch_idx_ls)
+
         return output, preds, gts
 
 
-    def _rm_seen_time(self, flag_rm_seen_ts, valid_sample_idx, input_samples, prob_t, train_nodes, timestamp_range):
+    def _get_prediction(self, prob_t, timestamp_range, useful_data, flag_rm_seen_ts):
         '''
         Given the triple (subject, relation, object), remove the seen timestamps in the training set during inference.
         Only used for timestamp-based datasets.
         '''
+        valid_sample_idx, input_samples, train_nodes = useful_data
+
         if flag_rm_seen_ts:
             input_samples = input_samples[valid_sample_idx]
-            prob_t_new = []
+            pred_t = []
             for idx in range(len(prob_t)):
                 cur_prob_t = prob_t[idx]
                 seen_ts = train_nodes[np.all(train_nodes[:, :3] == input_samples[idx, :3], axis=1), 3]
                 seen_ts = [timestamp_range.tolist().index(ts) for ts in seen_ts if ts in timestamp_range.tolist()]
                 cur_prob_t[seen_ts] = 0
-                
-                pred_t = timestamp_range[np.argmax(cur_prob_t)]
-                prob_t_new.append(pred_t)
-
-            prob_t = np.array(prob_t_new).reshape((-1, 1))
+                pred_t.append(timestamp_range[np.argmax(cur_prob_t)])
+            pred_t = np.array(pred_t).reshape((-1,))
         else:
-            prob_t = timestamp_range[np.argmax(prob_t, axis=1)].reshape((-1, 1))
-        return prob_t
+            pred_t = timestamp_range[np.argmax(prob_t, axis=1)].reshape((-1,))
+        
+        return pred_t
 
 
-    def _adjust_preds_based_on_dur(self, preds, batch_idx_ls, valid_sample_idx, pred_dur_dict, qq):
+    def _adjust_preds_based_on_dur(self, preds, qq, pred_dur_dict, batch_idx_ls):
         '''
         Adjust the predictions based on the duration information.
         Only used for interval-based datasets.
         '''
+        if not self.option.flag_interval:
+            return preds
+        
         if self.option.flag_use_dur:
             pred_ts, pred_te = preds[0], preds[1]
             pred_dur = []
-            for data_idx in np.array(batch_idx_ls)[valid_sample_idx]:
-                pred_dur1 = pred_dur_dict[str(data_idx - self.data['num_samples_dist'][1])]
+            for data_idx in batch_idx_ls:
+                pred_dur1 = pred_dur_dict[str(data_idx)]
                 pred_dur.append(abs(pred_dur1[1] - pred_dur1[0]))
-
             pred_te = pred_ts + np.array(pred_dur).reshape((-1, 1))
             preds = np.hstack([pred_ts, pred_te])
         
         if self.data['rel_ls_no_dur'] is not None:
-            preds = np.hstack(preds)
-            qq = np.array(qq)[valid_sample_idx]
-            x_tmp = preds[np.isin(qq, self.data['rel_ls_no_dur'])]
-            x_tmp = np.mean(x_tmp, axis=1).reshape((-1,1))
-            preds[np.isin(qq, self.data['rel_ls_no_dur'])] = np.hstack((x_tmp, x_tmp))
+            # For the relations without duration information, we use the average time as the prediction.
+            mask = np.isin(np.array(qq), self.data['rel_ls_no_dur'])
+
+            avg_time = np.mean(preds[mask], axis=1).reshape((-1,1))
+            preds[mask] = np.hstack((avg_time, avg_time))
 
         return preds
 
@@ -171,14 +182,22 @@ class Experiment():
         # Split the index list into batches.       
         idx_ls = split_list_into_batches(idx_ls, batch_size=batch_size)
         
+        # Prepare all batches to find the global batch idx (if needed).
+        all_batch_ls = split_list_into_batches(self.idx_ls_dict[mode], batch_size=batch_size)
+
         desc = stage if stage is not None else mode
 
         epoch_loss, epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE = [], [], [], []
-        for (i, batch_idx_ls) in enumerate(tqdm(idx_ls, desc=desc)):
+        for batch_idx_ls in tqdm(idx_ls, desc=desc):
             # Prepare useful data for inference
             final_state_vec, attn_refType = None, None
-            save_path = '../output/{}/{}_final_state_vec_batch_{}.json'.format(self.data['dataset_name'], mode, i)
+            
+            if mode in ['Valid', 'Test'] and not self.option.flag_acceleration:
+                # Find the corresponding batch index in the saved file.
+                save_path = '../output/{}/{}_final_state_vec_batch_{}.json'.format(self.data['dataset_name'], mode, all_batch_ls.index(batch_idx_ls))
+            
             if stage == 'time prediction':
+                # Read the saved final state vectors and attention scores.
                 final_state_vec, attn_refType, batch_idx_ls = self._load_saved_final_state(save_path)
             
             useful_data = [train_nodes, timestamp_range, pred_dur_dict, final_state_vec, attn_refType]
@@ -238,9 +257,8 @@ class Experiment():
             if stage == 'obtain state vec':
                 run_fn = self.learner.get_state_vec
         
-        # Prepare the index list for the current mode.
-        idx_ls_dict = {"Train": self.data['train_idx_ls'], "Valid": self.data['valid_idx_ls'], "Test": self.data['test_idx_ls']}
-        idx_ls = total_idx if total_idx is not None else idx_ls_dict[mode]
+        # Prepare the index list for the current mode.        
+        idx_ls = total_idx if total_idx is not None else self.idx_ls_dict[mode]
         if mode == "Train":
             random.shuffle(idx_ls)
      
