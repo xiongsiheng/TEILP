@@ -364,7 +364,7 @@ class Temporal_Walk(object):
 
 
 
-    def sample_walk(self, L, rel_idx, prev_edge=None, TR_ls=None, rel_ls=None, window=None, flag_time_shifting=False, fix_ref_time=False):
+    def sample_walk(self, L, rel_idx, prev_edge=None, TR_ls=None, rel_ls=None, window=None, flag_time_shifting=False, fix_cur_moment=False):
         """
         Try to sample a cyclic temporal random walk of length L (for a rule of length L-1).
 
@@ -396,7 +396,7 @@ class Temporal_Walk(object):
 
             filtered_edges = self.learn_data.copy()
 
-            if fix_ref_time:
+            if fix_cur_moment:
                 prev_facts = filtered_edges[(filtered_edges[:, 2] == start_edge[2]) & (filtered_edges[:, 1] == start_edge[1]) & (filtered_edges[:, 3] <= start_edge[3])]
             else:
                 prev_facts = filtered_edges[(filtered_edges[:, 0] == start_edge[0]) & (filtered_edges[:, 1] == start_edge[1]) & (filtered_edges[:, 3] <= start_edge[3])]

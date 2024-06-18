@@ -30,19 +30,18 @@ flag_time_shifting = parsed["shift"]
 dataset_idx = ['icews14', 'icews05-15', 'gdelt100'].index(dataset)
 num_entity = [7128, 10488, 100][dataset_idx]
 num_rel = [230, 251, 20][dataset_idx]
-timestamp_ls = [range(0, 365), range(0, 4017), range(90, 456)][dataset_idx]
+timestamp_range = [range(0, 365), range(0, 4017), range(90, 456)][dataset_idx]
 
 
 # Load the dataset.
 dataset_dir = "../data/{}/".format(dataset) if not flag_time_shifting else "../data/{}/time_shifting/".format(dataset)
-data = Grapher(dataset_dir, num_entity, num_rel, timestamp_ls)
+data = Grapher(dataset_dir, num_entity, num_rel, timestamp_range)
 
 
 
 
-
+# Prepare the data for gdelt under the time shifting setting.
 if dataset == 'gdelt100' and flag_time_shifting:
-    # Prepare the data for gdelt under the time shifting setting.
     with open('../data/gdelt100_sparse_edges.json') as json_file:
         edges = json.load(json_file)
 
@@ -82,7 +81,7 @@ temporal_walk = Temporal_Walk(BG_idx, data.inv_relation_id, transition_distr, fl
 
 
 def prepare_TR_ls_dict():
-    # possible temporal relations for different rule lengths
+    ''' prepare possible temporal relations for different rule lengths '''
     TR_ls_dict = {i: [] for i in range(1, 6)}
     TR_ukn_list = ['ukn']
     TR_list = ['bf', 'touch', 'af']
@@ -95,7 +94,17 @@ def prepare_TR_ls_dict():
 
 
 
-def random_walk_with_sampling(relations_idx, fix_ref_time=False):
+def random_walk_with_sampling(relations_idx, fix_cur_moment=False):
+    '''
+    Given the relations, perform the random walk with sampling.
+    
+    For time shifting setting, we are considering predicting the next occurrence of an event 
+        given all previous events before the last time the same event (s,r are the same, i.e., (s,r,?); or r,o are the same, i.e., (?,r,o)) happened.
+        We call this moment as current_moment, i.e., we know all the history before the current_moment, 
+        and standing at this momoent we want to know the next occurrence, i.e., the future event.
+    
+    fix_cur_moment: In time shifting setting, we consider fix current_moment when consider the two situations: (s,r,?) or (?,r,o).
+    '''
     if seed:
         np.random.seed(seed)
     
@@ -112,12 +121,12 @@ def random_walk_with_sampling(relations_idx, fix_ref_time=False):
             resulted_walk[length] = {}
             for TR_ls in TR_ls_dict[length]:
                 resulted_walk[length][' '.join(TR_ls)] = []
-            for sample in range(len(cur_samples)):
+            for sample in cur_samples:
                 for TR_ls in TR_ls_dict[length]:
                     cnt = 0
                     while cnt < num_walks_per_sample:
                         walk_successful, walk, _ = temporal_walk.sample_walk(length+1, rel, sample, TR_ls=TR_ls, window=None, 
-                                                                            flag_time_shifting=flag_time_shifting, fix_ref_time=fix_ref_time)
+                                                                            flag_time_shifting=flag_time_shifting, fix_cur_moment=fix_cur_moment)
                         cnt += 1
                         if walk_successful:
                             if walk not in resulted_walk[length][' '.join(TR_ls)]:
@@ -134,7 +143,7 @@ def random_walk_with_sampling(relations_idx, fix_ref_time=False):
                         rule[path] = [int(x) for x in rule[path]]
                     resulted_walks_final[length][TR_ls].append(rule)
 
-        # We do not distinguish the fix_ref_time setting in the output path.
+        # We do not distinguish the fix_cur_moment setting in the output pathname.
         folder = 'walk_res' if not flag_time_shifting else 'walk_res_time_shift'
         output_path = "../output/{}/{}_random_walks_rel_{}_train.json".format(folder, dataset, rel)     
         with open(output_path, "w") as json_file:
@@ -188,7 +197,7 @@ group_dict = split_the_relations_into_groups(pos_examples, num_samples_per_rel)
 for c in range(len(group_dict)):
     all_relations = group_dict[c]
     num_processes = min(len(all_relations), num_processes)
-    relations_idx_ls = split_list_into_batches(all_relations, num_processes)
+    relations_idx_ls = split_list_into_batches(all_relations, num_batches=num_processes)
     output = Parallel(n_jobs=num_processes)(
         delayed(random_walk_with_sampling)(relations_idx_ls[i], flag_time_shifting) for i in range(num_processes)
     )
