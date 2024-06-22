@@ -30,7 +30,7 @@ TEILP/
 
 ```
 
-Get into the dir
+Get into the path
 
 ```sh
 cd src
