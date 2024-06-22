@@ -3,8 +3,6 @@ import json
 import numpy as np
 from joblib import Parallel, delayed
 from tqdm import tqdm
-import copy
-import random
 import sys
 from collections import Counter
 from utlis import *
@@ -12,7 +10,7 @@ from utlis import *
 
 
 
-class Data_Processor():
+class Data_Processor(object):
     def _prepare_basic_info(self, data, option):
         '''
         Prepare basic information for the dataset.
@@ -395,101 +393,7 @@ class Data_Processor():
                 plot_freq_hist(res[:, 1], 10, 'fig/len{}/{}'.format(str(rule_length), '_'.join([rule_pattern, 'te'])))
         return
 
-
-    def process_random_walk_results(self, dataset, rel_ls, file_paths, data=None, flag_interval=True, flag_plot=False, mode=None, flag_time_shifting=False,
-                                    num_rules_per_rel=1000):
-        '''
-        Split the combined random walk results to obtain single samples and stat res.
-        This is done for timestamp datasets only.
-
-        Parameters:
-            dataset: str, name of the dataset
-            rel_ls: list, list of relations
-            file_paths: list, file paths
-            data: dict, data
-            flag_interval: bool, whether to use interval
-            flag_plot: bool, whether to plot the results
-            mode: str, mode
-            flag_time_shifting: bool, whether to use time shifting,
-            num_rules_per_rel: int, number of preserved rules per relation (based on frequency)
-
-        Returns:
-            None
-        '''
-        path_dataset = dataset if not flag_time_shifting else '{}_time_shifting'.format(dataset)
-        
-        output_dir = '../output/{}'.format(path_dataset)
-        if not os.path.exists(output_dir):
-            os.mkdir(output_dir)
-            os.mkdir('{}/samples'.format(output_dir))
-
-        for rel in rel_ls:
-            samples_edges, stat_res = {}, {}
-            if data is None:
-                data = self._find_relation_specific_data(file_paths, rel)
-       
-            if len(data) == 0:
-                continue
-
-            for rule_length in [1,2,3,4,5]:
-                if str(rule_length) not in data:
-                    continue
-                for TR_ls in data[str(rule_length)]:
-                    for walk in data[str(rule_length)][TR_ls]:
-                        self._update_stat_res(walk, stat_res, samples_edges, mode, TR_ls, flag_interval)
-            
-            # obtain stat information.
-            if mode == 'Train':
-                for rule_pattern in stat_res:
-                    self._format_stat_res(stat_res, rule_pattern, flag_plot)
-     
-                with open('{}/stat_res_rel_{}_.json'.format(output_dir, rel), 'w') as f:
-                    json.dump(stat_res, f)
-
-                for e in samples_edges:
-                    with open("{}/samples/{}_{}_sample_{}.json".format(output_dir, path_dataset, mode, e), "w") as f:
-                        json.dump(convert_dict({e: samples_edges[e]}), f)
-
-                rule_nums = rule_num_stat(samples_edges)
-
-                if rel not in rule_nums:
-                    pattern_ls = []
-                else:
-                    pattern_ls = sorted(rule_nums[rel], key=lambda p: rule_nums[rel][p], reverse=True)[:num_rules_per_rel]
-                    random.shuffle(pattern_ls)
-
-                with open("{}/{}_pattern_ls_rel_{}.json".format(output_dir, path_dataset, rel), 'w') as file:
-                    json.dump(pattern_ls, file)
-
-        return
-
-
-    def process_random_walk_results_dist_ver(self, dataset, mode, num_rel, file_paths, num_workers=10):
-        '''
-        Process the random walk results for the dataset in a distributed way.
-
-        Parameters:
-            dataset: str, name of the dataset
-            mode: str, mode
-            num_rel: int, number of relations
-            file_paths: list, file paths
-            num_workers: int, number of workers
-
-        Returns:
-            None
-        '''
-        index_pieces = split_list_into_batches(range(num_rel), num_batches=num_workers)
-
-        data = {}
-        for file_path in file_paths:
-            with open(file_path) as f:
-                data.update(json.load(f))
-
-        Parallel(n_jobs=num_workers)(delayed(self.process_random_walk_results)(dataset, piece, data=data, flag_interval=False, 
-                                                                                flag_plot=False, mode=mode) for piece in index_pieces)
-        return
-
-
+   
     def _calculate_time_prob_dist(self, edge, timestamp_range, targ_interval, stat_ls, idx_ls, mode, flag_time_shift=False, probs_normalization=True, flag_interval=True):
         '''
         Calculate the probability distribution of the time gap.
@@ -749,33 +653,6 @@ class Data_Processor():
         return [query_time, probs]
 
 
-    def prepare_random_walk_res(self, option, data, mode, num_workers, show_tqdm, rewriting, flag_interval):
-        '''
-        Prepare the random walk results.
-
-        Parameters:
-            option: dict, options
-            data: dict, data
-            mode: str, mode
-            num_workers: int, number of workers
-            show_tqdm: bool, whether to show the progress bar
-            rewriting: bool, whether to rewrite the results
-            flag_interval: bool, whether to use interval
-
-        Returns:
-            output_probs: dict, output probabilities with reference edges
-        '''
-        idx_ls = data['{}_idx_ls'.format(mode.lower())]
-        idx_pieces = split_list_into_batches(idx_ls, num_batches=num_workers)
-        outputs = Parallel(n_jobs=num_workers)(delayed(self.create_TEKG_in_batch)(option, data, one_piece, mode, show_tqdm, rewriting, flag_interval) 
-                                               for one_piece in idx_pieces)
-
-        output_probs = {}
-        for output in outputs:
-            output_probs.update(output)
-        return output_probs
-
-
     def create_TEKG_in_batch(self, option, data, idx_ls, mode, show_tqdm, rewriting, flag_interval):
         '''
         Create the TEKG in batch.
@@ -819,11 +696,114 @@ class Data_Processor():
         return output[-1]
 
 
+    def prepare_random_walk_res(self, option, data, mode, num_workers, show_tqdm, rewriting, flag_interval):
+        '''
+        Prepare the random walk results.
+
+        Parameters:
+            option: dict, options
+            data: dict, data
+            mode: str, mode
+            num_workers: int, number of workers
+            show_tqdm: bool, whether to show the progress bar
+            rewriting: bool, whether to rewrite the results
+            flag_interval: bool, whether to use interval
+
+        Returns:
+            output_probs: dict, output probabilities with reference edges
+        '''
+        idx_ls = data['{}_idx_ls'.format(mode.lower())]
+        idx_pieces = split_list_into_batches(idx_ls, num_batches=num_workers)
+        outputs = Parallel(n_jobs=num_workers)(delayed(self.create_TEKG_in_batch)(option, data, one_piece, mode, show_tqdm, rewriting, flag_interval) 
+                                               for one_piece in idx_pieces)
+
+        output_probs = {}
+        for output in outputs:
+            output_probs.update(output)
+        return output_probs
+
+
+
+
+
+class Option(object):
+    def __init__(self, d):
+        self.__dict__ = d
+    def save(self):
+        with open(os.path.join(self.this_expsdir, "option.txt"), "w") as f:
+            for key, value in sorted(self.__dict__.items(), key=lambda x: x[0]):
+                f.write("%s, %s\n" % (key, str(value)))
+
+
+
+
+class OnlineStatsVector:
+    '''
+    Class to calculate the mean and variance of a vector of values using the online algorithm.
+    '''
+    def __init__(self, vector_length):
+        self.n = np.zeros(vector_length)
+        self.mean = np.zeros(vector_length)
+        self.M2 = np.zeros(vector_length)
+        # self.hist = []
+
+    def update(self, x):
+        x = np.array(x, dtype=float)
+        mask = ~np.isnan(x)
+        delta = np.zeros_like(x)
+        delta2 = np.zeros_like(x)
+        # self.hist.append(x)
+        for i in range(len(x)):
+            if mask[i]:
+                self.n[i] += 1
+                delta[i] = x[i] - self.mean[i]
+                self.mean[i] += delta[i] / self.n[i]
+                delta2[i] = x[i] - self.mean[i]
+                self.M2[i] += delta[i] * delta2[i]
+    
+    def get_mean(self):
+        return self.mean
+    
+    def get_variance(self):
+        variance = np.zeros_like(self.mean)
+        for i in range(len(self.n)):
+            if self.n[i] > 1:
+                variance[i] = self.M2[i] / self.n[i]
+        return variance
+    
+    def get_std(self):
+        return np.sqrt(self.get_variance())
+
+
+
+
+class Rule_summarizer(object):
+    def convert_walks_into_rules(self, path, dataset, idx_ls=None, flag_time_shift=False, 
+                                flag_capture_dur_only=False, rel=None, known_edges=None, flag_few_training=False,
+                                ratio=None, imbalanced_rel=None, flag_biased=False, exp_idx=None, targ_rel_ls=None,
+                                num_processes=20, stat_res_path='', flag_interval=True):
+        '''
+        This function is for interval dataset only.
+        '''
+        file_ls, rel = obtain_walk_file_ls(path, dataset, idx_ls, ratio, imbalanced_rel, flag_biased, exp_idx)
+        targ_rel_ls = rel if rel is not None else targ_rel_ls
+
+        if targ_rel_ls is None:
+            return
+        
+        num_processes = min(num_processes, len(targ_rel_ls))
+        rel_batch_ls = split_list_into_batches(targ_rel_ls, num_batches=num_processes)
+
+        Parallel(n_jobs=num_processes)(
+            delayed(self.process_TEILP_results_in_batch)(path, file_ls, flag_capture_dur_only, rel_batch, known_edges, stat_res_path, flag_interval) 
+                                                        for rel_batch in rel_batch_ls)
+        
+        return
+
+
     def process_TEILP_results(self, res_dict, capture_dur_only=False, selected_rel=None, known_edges=None, flag_interval=True):
         '''
         Read the results of the TEILP model and extract the relevant information.
-        This is for interval dataset only.
-        To accelerate, we can select path for the given rules.
 
         Parameters:
             res_dict: dict, results
@@ -944,83 +924,4 @@ class Data_Processor():
             with open(stat_res_path + "_rel_" + str(rel) + ".json", "w") as f:
                 json.dump(output_stat, f)
 
-        return
-
-
-
-
-
-
-class Option(object):
-    def __init__(self, d):
-        self.__dict__ = d
-    def save(self):
-        with open(os.path.join(self.this_expsdir, "option.txt"), "w") as f:
-            for key, value in sorted(self.__dict__.items(), key=lambda x: x[0]):
-                f.write("%s, %s\n" % (key, str(value)))
-
-
-
-
-class OnlineStatsVector:
-    '''
-    Class to calculate the mean and variance of a vector of values using the online algorithm.
-    '''
-    def __init__(self, vector_length):
-        self.n = np.zeros(vector_length)
-        self.mean = np.zeros(vector_length)
-        self.M2 = np.zeros(vector_length)
-        # self.hist = []
-
-    def update(self, x):
-        x = np.array(x, dtype=float)
-        mask = ~np.isnan(x)
-        delta = np.zeros_like(x)
-        delta2 = np.zeros_like(x)
-        # self.hist.append(x)
-        for i in range(len(x)):
-            if mask[i]:
-                self.n[i] += 1
-                delta[i] = x[i] - self.mean[i]
-                self.mean[i] += delta[i] / self.n[i]
-                delta2[i] = x[i] - self.mean[i]
-                self.M2[i] += delta[i] * delta2[i]
-    
-    def get_mean(self):
-        return self.mean
-    
-    def get_variance(self):
-        variance = np.zeros_like(self.mean)
-        for i in range(len(self.n)):
-            if self.n[i] > 1:
-                variance[i] = self.M2[i] / self.n[i]
-        return variance
-    
-    def get_std(self):
-        return np.sqrt(self.get_variance())
-
-
-
-
-class Rule_summarizer(Data_Processor):
-    def convert_walks_into_rules(self, path, dataset, idx_ls=None, flag_time_shift=False, 
-                                flag_capture_dur_only=False, rel=None, known_edges=None, flag_few_training=False,
-                                ratio=None, imbalanced_rel=None, flag_biased=False, exp_idx=None, targ_rel_ls=None,
-                                num_processes=20, stat_res_path='', flag_interval=True):
-        '''
-        This function is for interval dataset only.
-        '''
-        file_ls, rel = obtain_walk_file_ls(path, dataset, idx_ls, ratio, imbalanced_rel, flag_biased, exp_idx)
-        targ_rel_ls = rel if rel is not None else targ_rel_ls
-
-        if targ_rel_ls is None:
-            return
-        
-        num_processes = min(num_processes, len(targ_rel_ls))
-        rel_batch_ls = split_list_into_batches(targ_rel_ls, num_batches=num_processes)
-
-        Parallel(n_jobs=num_processes)(
-            delayed(self.process_TEILP_results_in_batch)(path, file_ls, flag_capture_dur_only, rel_batch, known_edges, stat_res_path, flag_interval) 
-                                                        for rel_batch in rel_batch_ls)
-        
         return

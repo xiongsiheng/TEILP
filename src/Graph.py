@@ -25,7 +25,7 @@ class Base(object):
         self.nodes = np.vstack((self.data['train_nodes'], self.data['valid_nodes'], self.data['test_nodes']))
     
 
-    def _initialize_walk_res(self, idx_ls, mode):
+    def _convert_walk_res_into_probs(self, idx_ls, mode):
         '''
         Given the idx_ls, either read the pre-processing results or do the pre-processing right now
 
@@ -192,7 +192,7 @@ class TEKG_fast_ver(Base):
         return selected_rule_ls, rule_scores, refType_scores
 
 
-    def _populate_refNode_structures(self, walk_res, mode, selected_rule_ls=None, rule_scores=None, refType_scores=None):
+    def _build_refNode_structures(self, walk_res, mode, selected_rule_ls=None, rule_scores=None, refType_scores=None):
         '''
         For each sample, populates refNode_probs and refNode_rule_idx based on random_walk_res
         '''
@@ -326,7 +326,7 @@ class TEKG_fast_ver(Base):
         return one_hot
 
 
-    def _process_walk_res(self, idx_ls, random_walk_res, query_relations, mode):
+    def _build_graph(self, idx_ls, random_walk_res, query_relations, mode):
         '''
         Process the walk res to create the structured data.
         '''
@@ -338,7 +338,7 @@ class TEKG_fast_ver(Base):
             
             walk_res = random_walk_res[query_idx]
             selected_rule_ls, rule_scores, refType_scores = self._create_selected_rule_ls(walk_res, query_relations[idx], mode)
-            flag_valid, refNode_probs, refNode_rule_idx, preds = self._populate_refNode_structures(walk_res, mode, selected_rule_ls, rule_scores, refType_scores)
+            flag_valid, refNode_probs, refNode_rule_idx, preds = self._build_refNode_structures(walk_res, mode, selected_rule_ls, rule_scores, refType_scores)
 
             if not flag_valid:
                 continue
@@ -385,7 +385,7 @@ class TEKG_fast_ver(Base):
             query_samples: The query samples.
             final_preds: The final predictions.
         '''
-        random_walk_res, input_intervals_dict = self._initialize_walk_res(idx_ls, mode)
+        random_walk_res, input_intervals_dict = self._convert_walk_res_into_probs(idx_ls, mode)
         query_samples, query_rel, query_time = self._load_queries(idx_ls)
 
         if mode == 'Test' and (not self.call_by_TEKG):
@@ -393,7 +393,7 @@ class TEKG_fast_ver(Base):
                 if data_idx in input_intervals_dict:
                     query_time[i] = input_intervals_dict[data_idx].tolist()
 
-        output = self._process_walk_res(idx_ls, random_walk_res, query_rel, mode)
+        output = self._build_graph(idx_ls, random_walk_res, query_rel, mode)
         valid_sample_idx, query_rel_flatten, refNode_sources, probs, refNodes, final_preds = output
 
         return query_rel, query_rel_flatten, refNode_sources, probs, refNodes, valid_sample_idx, query_time, query_samples, final_preds
@@ -480,7 +480,7 @@ class TEKG(Base):
         return inv_edges
 
 
-    def _process_saved_data(self, idx_ls, flag_use_batch_graph):
+    def _process_walk_res(self, idx_ls, flag_use_batch_graph):
         query_nodes, query_time = [], []
         batch_nodes = [] if flag_use_batch_graph else None
         num_entity = None
@@ -534,9 +534,9 @@ class TEKG(Base):
             return np.mean(probs, axis=0)
       
 
-    def _calculate_dist_score(self, extra_data, all_idx):
+    def _calculate_distribution_score(self, extra_data, all_idx):
         '''
-        Given all the related indices, we calculate the score for current dist.
+        Given all the related indices, we calculate the score for current distribution.
         '''
         data_idx, edge_idx, idx_query_time, idx_event_pos, idx_ref_time = all_idx
         final_state_vec, attn_refType = extra_data
@@ -611,7 +611,7 @@ class TEKG(Base):
                             else:
                                 # During inference, we calculate the time prediction in an online manner.
                                 all_idx = [data_idx, edge_idx, idx_query_time, idx_event_pos, idx_ref_time]
-                                preds[idx_query_time] += selected_prob * self._calculate_dist_score(extra_data, all_idx)
+                                preds[idx_query_time] += selected_prob * self._calculate_distribution_score(extra_data, all_idx)
                         flag_valid = 1
         
         if flag_valid and stage == 'time prediction':                
@@ -620,7 +620,7 @@ class TEKG(Base):
         return flag_valid, ref_event_idx
 
 
-    def _format_outputs(self, idx_ls, query_nodes, TEKG_nodes, TEKG_nodes_idx, num_entity, walk_res, mode, stage, extra_data):
+    def _build_graph(self, idx_ls, query_nodes, TEKG_nodes, TEKG_nodes_idx, num_entity, walk_res, mode, stage, extra_data):
         '''
         Format the outputs for the current batch.
         '''
@@ -777,7 +777,7 @@ class TEKG(Base):
             # Instead we use the batch graph for each batch.
             flag_use_batch_graph = True
         
-        query_samples, query_time, batch_nodes, batch_nodes_idx, num_entity = self._process_saved_data(idx_ls, flag_use_batch_graph)
+        query_samples, query_time, batch_nodes, batch_nodes_idx, num_entity = self._process_walk_res(idx_ls, flag_use_batch_graph)
 
         batch_nodes = TEKG_nodes if batch_nodes is None else batch_nodes
         batch_nodes_idx = TEKG_nodes_idx if batch_nodes_idx is None else batch_nodes_idx
@@ -794,7 +794,7 @@ class TEKG(Base):
 
         
         if walk_res is None:
-            walk_res, query_time_dict = self._initialize_walk_res(idx_ls, mode)
+            walk_res, query_time_dict = self._convert_walk_res_into_probs(idx_ls, mode)
 
             if mode == 'Test':
                 for i, data_idx in enumerate(idx_ls):
@@ -812,8 +812,8 @@ class TEKG(Base):
         # For probs and valid_refNode_idx, we use a composite index here to simplify the coding.
         # idx_complete = 4*idx_query_time + 2*(1-idx_event_pos) + idx_ref_time
         #           or = 1-idx_event_pos
-        qq, hh, tt, probs, valid_sample_idx, valid_refNode_idx, final_preds = self._format_outputs(idx_ls, query_samples, batch_nodes, batch_nodes_idx, num_entity, 
-                                                                                                     walk_res, mode, stage, extra_data)
+        qq, hh, tt, probs, valid_sample_idx, valid_refNode_idx, final_preds = self._build_graph(idx_ls, query_samples, batch_nodes, batch_nodes_idx, num_entity, 
+                                                                                                walk_res, mode, stage, extra_data)
  
         inputs_for_enhancement = []
         if self.option.flag_state_vec_enhancement:
