@@ -35,14 +35,14 @@ def list_subtract(ls1, ls2):
     return result
 
 
-def my_shuffle(data, seed=None):
+def shuffle_data(data, seed=None):
     if seed is not None:
         np.random.seed(seed)
 
     idx = list(range(len(data)))
     random.shuffle(idx)
     new_data = data[idx]
-    return new_data
+    return new_data, idx
 
 
 def interval_intersection(interval1, interval2):
@@ -202,18 +202,31 @@ def calculate_TR(interval1, interval2):
 
 
 def calculate_TR_mat_ver(interval1, interval2):
+    # Assuming interval1 and interval2 are numpy arrays of shape (batch_size, 1) or (batch_size, 2)
     interval1 = np.array(interval1)
     interval2 = np.array(interval2)
+
+    def process_intervals(interval):
+        if interval.shape[1] == 1:
+            return np.column_stack((interval[:, 0], interval[:, 0]))
+        else:
+            return np.column_stack((np.min(interval, axis=1), np.max(interval, axis=1)))
+    
+    # Process both intervals
+    interval1_processed = process_intervals(interval1)
+    interval2_processed = process_intervals(interval2)
     
     # Check for presence of 9999 in any row of either matrix
-    invalid_rows = np.any((interval1 == 9999) | (interval2 == 9999), axis=1)
+    invalid_rows = np.any((interval1_processed == 9999) | (interval2_processed == 9999), axis=1)
     
-    # Set invalid rows to 0
-    result = np.ones(interval1.shape[0], dtype=int) * 2
+    # Set default TR to 2 (touching)
+    result = np.ones(interval1_processed.shape[0], dtype=int) * 2
     
     # Check conditions for each row
-    result[np.logical_and(interval1[:, 0] < interval2[:, 0], interval1[:, 1] <= interval2[:, 0])] = 1
-    result[np.logical_and(interval1[:, 0] >= interval2[:, 1], interval1[:, 1] > interval2[:, 1])] = 3
+    result[np.logical_and(interval1_processed[:, 0] < interval2_processed[:, 0], interval1_processed[:, 1] <= interval2_processed[:, 0])] = 1
+    result[np.logical_and(interval1_processed[:, 0] >= interval2_processed[:, 1], interval1_processed[:, 1] > interval2_processed[:, 1])] = 3
+    
+    # Set invalid rows to 0
     result[invalid_rows] = 0
     
     return result
@@ -530,7 +543,11 @@ def stat_para_estimation_v2(data, dist_type=None):
 
 
 def obtain_inv_edge(edges, num_rel):
-    return np.hstack([edges[:,2:3], edges[:,1:2] + num_rel, edges[:,0:1], edges[:,3:]])
+    rel = edges[:, 1:2].copy()
+    mask = rel < num_rel
+    rel[mask] += num_rel
+    rel[~mask] -= num_rel
+    return np.hstack([edges[:, 2:3], rel, edges[:, 0:1], edges[:, 3:]])
 
 
 def save_data(filename, line):

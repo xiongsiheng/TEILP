@@ -30,12 +30,25 @@ class Experiment():
         if self.option.create_log:
             self.log_file = open(os.path.join(self.option.this_expsdir, "log.txt"), "w")
 
-        if self.data['dataset_name'] in ['wiki', 'YAGO']:
+        if self.option.flag_interval:
             self.metrics = ['aeIOU', 'TAC']
         else:
             self.metrics = ['MAE']
 
         self.idx_ls_dict = {"Train": self.data['train_idx_ls'], "Valid": self.data['valid_idx_ls'], "Test": self.data['test_idx_ls']}
+
+
+    def _find_middle_point(self, array):
+        # Find the length of the array
+        length = len(array)
+
+        # Calculate the middle index
+        middle_index = length // 2
+
+        # Get the middle point
+        middle_point = array[middle_index]
+
+        return middle_point
 
 
     def _calculate_output(self, myTEKG, run_fn, batch_idx_ls, mode, stage, flag_rm_seen_ts, useful_data):
@@ -49,21 +62,20 @@ class Experiment():
         
         if self.option.flag_acceleration:
             # Variables used by the fast-ver model:
-            #       query_rel_dummy: [] * dummy_batch_size (num_nodes);  
-            #       refNode_source: [(dummy_batch_size,)] * batch_size;
+            #       query_rel_flatten: [] * flatten_batch_size (num_nodes);  
+            #       refNode_source: [(flatten_batch_size,)] * batch_size;
             #       probs: (num_rules_in_total_for_different_nodes, 3); [event_idx, rule_idx, prob]
-            qq, query_rel_dummy, refNode_source, probs, _, valid_sample_idx, \
-                            input_intervals, input_samples, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode)
+            qq, query_rel_flatten, refNode_source, probs, _, valid_sample_idx, \
+                            query_time, query_samples, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode)
         else:
-            qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, \
-                valid_refNode_idx, inputs_for_enhancement, input_intervals,\
-                    input_samples, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode, stage, extra_data)
+            qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, valid_refNode_idx, inputs_for_enhancement, query_time,\
+                    query_samples, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode, stage, extra_data)
 
-     
-        gts = np.array(input_intervals)
+        gts = np.array(query_time)
         
         # We first random guess the time.
-        preds = [[1900, 2000] for _ in range(len(batch_idx_ls))]  # YAGO and wiki
+        preds = [[1900, 2000] for _ in range(len(batch_idx_ls))]  if self.option.dataset in ['wiki', 'YAGO'] else \
+                [[self._find_middle_point(self.data['timestamp_range'])] for _ in range(len(batch_idx_ls))]
         preds = np.array(preds)
         
         if mode == "Train":
@@ -71,7 +83,7 @@ class Experiment():
                 # all samples are invalid (no walk can be found)
                 return [], [], []
 
-            inputs = [query_rel_dummy, refNode_source, probs] if self.option.flag_acceleration else \
+            inputs = [query_rel_flatten, refNode_source, probs] if self.option.flag_acceleration else \
                      [qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, inputs_for_enhancement]        
             output = run_fn(self.sess, inputs)
 
@@ -91,7 +103,7 @@ class Experiment():
                 output = run_fn(self.sess, inputs)
                 output['batch_idx'] = batch_idx_ls
             else:
-                useful_data = [valid_sample_idx, input_samples, train_nodes]
+                useful_data = [valid_sample_idx, query_samples, train_nodes]
                 output = final_preds
 
                 # Obtain the predictions from the output.
@@ -104,7 +116,7 @@ class Experiment():
                         preds[valid_sample_idx, i] = self._get_prediction(prob_t, timestamp_range, useful_data, flag_rm_seen_ts)
                     
                 preds = self._adjust_preds_based_on_dur(preds, qq, pred_dur_dict, batch_idx_ls)
-
+        
         return output, preds, gts
 
 
@@ -113,14 +125,16 @@ class Experiment():
         Given the triple (subject, relation, object), remove the seen timestamps in the training set during inference.
         Only used for timestamp-based datasets.
         '''
-        valid_sample_idx, input_samples, train_nodes = useful_data
-
+        valid_sample_idx, query_samples, train_nodes = useful_data
+        
         if flag_rm_seen_ts:
-            input_samples = input_samples[valid_sample_idx]
+            query_samples = np.array(query_samples)
+            query_samples = query_samples[valid_sample_idx]
             pred_t = []
             for idx in range(len(prob_t)):
+                # For each sample, we remove the seen timestamps in the training set.
                 cur_prob_t = prob_t[idx]
-                seen_ts = train_nodes[np.all(train_nodes[:, :3] == input_samples[idx, :3], axis=1), 3]
+                seen_ts = train_nodes[np.all(train_nodes[:, :3] == query_samples[idx, :3], axis=1), 3]
                 seen_ts = [timestamp_range.tolist().index(ts) for ts in seen_ts if ts in timestamp_range.tolist()]
                 cur_prob_t[seen_ts] = 0
                 pred_t.append(timestamp_range[np.argmax(cur_prob_t)])
@@ -223,7 +237,6 @@ class Experiment():
                     if 'MAE' in self.metrics:
                         epoch_eval_MAE += np.abs(np.array(preds).reshape(-1) - gts.reshape(-1)).tolist()
 
-
         if mode == "Train":
             if len(epoch_loss) == 0:
                 epoch_loss = [100]
@@ -239,7 +252,7 @@ class Experiment():
                 return epoch_eval_aeIOU, epoch_eval_TAC, epoch_eval_MAE
 
 
-    def one_epoch(self, mode, total_idx=None, stage=None):
+    def one_epoch(self, total_idx, mode, stage):
         assert mode in ["Train", "Valid", "Test"]
         assert stage in ['obtain state vec', 'time prediction', None]  # We only use stage during inference.
 
@@ -260,34 +273,34 @@ class Experiment():
             if stage == 'obtain state vec':
                 run_fn = self.learner.get_state_vec
         
-        # Prepare the index list for the current mode.        
-        idx_ls = total_idx if total_idx is not None else self.idx_ls_dict[mode]
-        if mode == "Train":
-            random.shuffle(idx_ls)
-     
-        return self.running_model(myTEKG, run_fn, idx_ls, mode, stage, flag_rm_seen_ts)
+        return self.running_model(myTEKG, run_fn, total_idx, mode, stage, flag_rm_seen_ts)
 
 
     def one_epoch_train(self, total_idx=None):       
         if total_idx is None:
             # Randomly sample the training data if the option is choosen.
             processor = Data_Processor()
-            total_idx = processor._trainig_data_sampling(self.data['train_nodes'], self.data['num_rel'], num_sample_per_rel=self.option.num_samples_per_rel)
+            total_idx = processor._trainig_data_sampling(self.data['train_nodes'], self.data['train_idx_ls'], self.data['num_rel'], num_sample_per_rel=self.option.num_samples_per_rel)
+            random.shuffle(total_idx)
 
-        loss = self.one_epoch("Train", total_idx=total_idx)
+        loss = self.one_epoch(total_idx, "Train", None)
         self.train_stats.append([loss])
 
 
     def one_epoch_valid(self, total_idx=None):
         stage = None if self.option.flag_acceleration else 'time prediction'
-        eval1 = self.one_epoch("Valid", total_idx=total_idx, stage=stage)
+        total_idx = self.idx_ls_dict["Valid"] if total_idx is None else total_idx
+        
+        eval1 = self.one_epoch(total_idx, "Valid", stage)
         self.valid_stats.append([eval1])
         self.best_valid_eval1 = max(self.best_valid_eval1, np.mean(eval1[0]))
 
 
     def one_epoch_test(self, total_idx=None):
         stage = None if self.option.flag_acceleration else 'time prediction'
-        eval1 = self.one_epoch("Test", total_idx=total_idx, stage=stage)
+        total_idx = self.idx_ls_dict["Test"] if total_idx is None else total_idx
+
+        eval1 = self.one_epoch(total_idx, "Test", stage)
         self.test_stats.append([eval1])
         return eval1
 
@@ -326,20 +339,20 @@ class Experiment():
 
     def save_rule_scores(self):
         rule_scores, refType_scores = self.learner.get_rule_scores_fast_ver(self.sess)
+        path_suffix = '' if not self.option.shift else '_time_shifting'
 
-        path_suffix = '_' if not self.option.shift else '_time_shifting_'
-        if not os.path.exists('../output/' + self.option.dataset + path_suffix[:-1]):
-            os.mkdir('../output/' + self.option.dataset + path_suffix[:-1])
+        if not os.path.exists('../output/' + self.option.dataset):
+            os.mkdir('../output/' + self.option.dataset)
 
         for rel in range(self.data['num_rel']):
             output = {}
             output['rule_scores'] = rule_scores[rel, :].tolist()
             output['refType_scores'] = [scores[rel, :].tolist() for scores in refType_scores]
         
-            cur_path = '../output/' + self.option.dataset + path_suffix[:-1] + '/' + self.option.dataset + path_suffix
-            if self.option.shift and rel >= self.data['num_rel']//2:
-                cur_path += 'fix_ref_time_'
-            cur_path += 'rule_scores_rel_' + str(rel) + '.json'
+            cur_path = '../output/' + self.option.dataset + '/rule_scores/' + self.option.dataset + path_suffix
+            # if self.option.shift and rel >= self.data['num_rel']//2:
+            #     cur_path += 'fix_ref_time_'
+            cur_path += '_rel_' + str(rel) + '.json'
                     
             with open(cur_path, 'w') as file:
                 json.dump(output, file)

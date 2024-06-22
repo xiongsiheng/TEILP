@@ -151,8 +151,11 @@ pos_examples_idx = prepare_pos_examples_idx()
 
 
 
-if not os.path.exists('../output/'):
-    os.mkdir('../output/')
+output_folder = ['../output/', '../output/{}'.format(dataset_using), '../output/{}/walk_res'.format(dataset_using), 
+                 '../output/{}/walk_res_time_shift'.format(dataset_using), '../output/{}/stat_res'.format(dataset_using)]
+for folder in output_folder:
+    if not os.path.exists(folder):
+        os.mkdir(folder)
 
 
 
@@ -168,11 +171,8 @@ def create_stat_res_path():
     '''
     Create the path for the stat res
     '''
-    stat_res_path = '../output/' + dataset_using
-    if not os.path.exists(stat_res_path):
-        os.mkdir(stat_res_path)
+    stat_res_path = '../output/{}/stat_res/{}'.format(dataset_using, dataset_using)
 
-    stat_res_path += '/' + dataset_using
     if flag_few_training:
         stat_res_path += '_ratio_' + str(ratio)
     if flag_biased:
@@ -183,7 +183,6 @@ def create_stat_res_path():
     if flag_time_shift:
         stat_res_path += '_time_shifting'
 
-    stat_res_path += "_stat_res"
     return stat_res_path
 
 
@@ -192,7 +191,7 @@ stat_res_path = create_stat_res_path()
 
 # Convert the walks into rules and save the results.
 summarizer = Rule_summarizer()
-summarizer.convert_walks_into_rules(dataset=dataset_using, path='../output/' + output_path, idx_ls=pos_examples_idx, 
+summarizer.convert_walks_into_rules(dataset=dataset_using, path='../output/{}/{}'.format(dataset_using, output_path), idx_ls=pos_examples_idx, 
                                     flag_time_shift=flag_time_shift, flag_biased=flag_biased, flag_few_training=flag_few_training,
                                     ratio=ratio, imbalanced_rel=imbalanced_rel, exp_idx=exp_idx, 
                                     targ_rel_ls=targ_rel_ls, num_processes=24, stat_res_path=stat_res_path)

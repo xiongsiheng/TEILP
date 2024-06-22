@@ -13,6 +13,8 @@ import itertools
 
 
 
+
+
 def main():
     parser = argparse.ArgumentParser(description="Experiment setup")
     parser.add_argument('--gpu', default="0", type=str)
@@ -32,12 +34,12 @@ def main():
     
     # We consider only using the shallow layers to accelerate the training and inference.
     # Set flag_acceleration to False to use the RNN structure.
-    option.flag_acceleration = True
+    option.flag_acceleration = False
     
     # Use different scores for different lengths of rules. Found not necessary.
     option.flag_ruleLen_split_ver = False
 
-    # Use the duration information. Found not necessary.
+    # Use the duration information (interval-based datasets only). Found not necessary. 
     option.flag_use_dur = False
 
     # We enhance the RNN structure by adding the shallow layers.
@@ -52,7 +54,14 @@ def main():
     
     # If we use both RNN and shallow layers, it is better to sample the training data for efficiency.
     # option.num_samples_per_rel = -1 means no sampling for the training data.
-    option.num_samples_per_rel = -1 if option.flag_acceleration else 200
+    if option.flag_acceleration:
+        option.num_samples_per_rel = -1
+    else:
+        if option.dataset in ['wiki', 'YAGO', 'gdelt100']:
+            option.num_samples_per_rel = 200
+        else:
+            # The number of relations in icews dataset is too large.
+            option.num_samples_per_rel = 20
 
 
     # Setting for the model. No need to change.
@@ -76,12 +85,13 @@ def main():
     # After that, we can set it to False to skip this step.
     # We only do preprocessing for training data.
     processor = Data_Processor()
-    data = processor.prepare_data(option, preprocess_walk_res=True)
-
+    data = processor.prepare_data(option, preprocess_walk_res=False)
+    
 
     # Build the model.
     learner = Learner(option, data)
     print("Learner built.")
+    
 
     saver = tf.train.Saver(max_to_keep=option.max_epoch)
     config = tf.ConfigProto()
@@ -139,13 +149,18 @@ def main():
                 delayed(experiment.test)(idx_batch) for idx_batch in idx_ls
                 )
       
-        eval_aeIOU, eval_TAC = [], []
+        eval_aeIOU, eval_TAC, eval_MAE = [], [], []
         for output in outputs:
             eval_aeIOU += output[0]
             eval_TAC += output[1]
+            eval_MAE += output[2]
 
-        print('aeIOU: ', np.mean(eval_aeIOU), len(eval_aeIOU))
-        print('TAC: ', np.mean(eval_TAC), len(eval_TAC))
+        if len(eval_aeIOU) > 0:
+            print('aeIOU: ', np.mean(eval_aeIOU), len(eval_aeIOU))
+        if len(eval_TAC) > 0:    
+            print('TAC: ', np.mean(eval_TAC), len(eval_TAC))
+        if len(eval_MAE) > 0:
+            print('MAE: ', np.mean(eval_MAE), len(eval_MAE))
 
     
     

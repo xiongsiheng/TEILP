@@ -1,12 +1,8 @@
-import random
 import numpy as np
 import sys
 import json
-from joblib import Parallel, delayed
-import time
-import os
 import pandas as pd
-import copy
+
 
 
 
@@ -38,10 +34,7 @@ class Walker(object):
                 if idx not in pos_examples_idx:
                     continue
 
-            cur_path = '../output/'+ output_path + '/'+ self.dataset_using +'_idx_'+str(idx)
-
-            if not os.path.exists('../output/'+ output_path):
-                os.mkdir('../output/'+ output_path)
+            cur_path = '../output/{}/{}/{}'.format(self.dataset_using, output_path, self.dataset_using + '_idx_' + str(idx))
 
             if ratio is not None:
                 cur_path += '_ratio_' + str(ratio)
@@ -73,10 +66,6 @@ class Walker(object):
                     cur_time = max(prev_facts[:, 3])
                     masked_facts = masked_facts[masked_facts[:, 3] <= cur_time]
                     masked_facts[:, 4] = np.minimum(masked_facts[:, 4], cur_time)
-                    # print(line)
-                    # print(prev_facts)
-                    # print(masked_facts)
-                    # print('--------------------------')
 
             if len(masked_facts) == 0:
                 walk_dict = {'query': line.tolist()}

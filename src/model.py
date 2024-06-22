@@ -35,7 +35,7 @@ class Learner(object):
 
         # To make the learning more stable, we scale the final prob dynamically.
         # If the prob is greater than self.prob_scaling_factor[0], we scale it by self.prob_scaling_factor[1].
-        self.prob_scaling_factor = [0.1, 0.5]  # YAGO, wiki
+        self.prob_scaling_factor = [0.1, 0.5]
 
         np.random.seed(self.seed)
 
@@ -63,32 +63,6 @@ class Learner(object):
             return (g, v)
 
 
-    def _attn_normalization(self, attn, sample_indices):
-        '''
-        Normalize the attention weights (Important!)
-
-        Parameters:
-            attn: attention weights, shape: (num_rules_total, 1)
-            sample_indices: sample indices, shape: (num_samples, num_rules_total)
-                            [[1, 0, 0, 0, 0],   # rule 1 from sample 1
-                             [0, 1, 1, 0, 0],   # rule 2, 3 from sample 2
-                             [0, 0, 0, 1, 1]]   # rule 4, 5 from sample 3
-
-        Returns:
-            normalized_attn: normalized attention weights, shape: (num_rules_total, 1)
-        '''
-        attn = tf.reshape(attn, (1, -1))
-        # Compute sum of attn for each sample
-        sample_sums = tf.reduce_sum(sample_indices*attn, axis=1) + 1e-20 # shape: (num_samples, )
-
-        # Normalize attn
-        normalized_attn = (sample_indices*attn) / tf.expand_dims(sample_sums, axis=1)
-        normalized_attn = tf.reduce_sum(normalized_attn, axis=0)
-
-        normalized_attn = tf.reshape(normalized_attn, (-1, 1))
-        return normalized_attn
-
-
     def _init_ruleLen_embed(self, pattern_ls):
         self.ruleLen_embedding = [np.zeros((self.num_query, self.num_rule))] * (self.num_step-1)
 
@@ -102,7 +76,7 @@ class Learner(object):
                 self.ruleLen_embedding[l-1][int(rel)] = ruleLen_cp
 
 
-    def _final_prob_scalling(self, prob):
+    def _scale_final_prob(self, prob):
         # Calculate if any entry is greater than self.prob_scaling_factor[0]
         condition = tf.reduce_any(tf.greater(prob, self.prob_scaling_factor[0]))
 
@@ -197,7 +171,7 @@ class Learner(object):
 
     
     def _build_attn_refType(self):
-        num_cases = 6 if self.flag_int else 2
+        num_cases = 6 if self.flag_int else 1
         # The probability we choose different cases: 
         # if self.flag_int:
         #       [tqs, tqe] X [(last_ts, last_te), (first_ts, first_te), (last_event, first_event)]
@@ -213,8 +187,8 @@ class Learner(object):
 
 
     def _build_shallow_layers(self):
-        self.query_rels_dummy = tf.placeholder(tf.int32, [None])   # (dummy_batch_size) num_relevant_events in a batch
-        self.random_walk_ind = tf.placeholder(tf.float32, [None, 2, self.num_rule])  # (dummy_batch_size, 2, num_rule)
+        self.query_rels_flatten = tf.placeholder(tf.int32, [None])   # (flatten_batch_size) num_relevant_events in a batch
+        self.random_walk_ind = tf.placeholder(tf.float32, [None, 2, self.num_rule])  # (flatten_batch_size, 2, num_rule)
         self.refNode_index = tf.placeholder(tf.int32, [None, 2])    # show the refNode index from which query
 
         # Use shallow layers to enhance the state vector.
@@ -332,13 +306,13 @@ class Learner(object):
         Use shallow layers to enhance the state vector.
         notation: 0: last_event, 1: first_event (different from fast ver)
         '''
-        attn_rule = tf.nn.embedding_lookup(self.attn_rule_embed, self.query_rels_dummy)
-        self.attn_rule = tf.nn.softmax(attn_rule, axis=2) # shape: (dummy_batch_size, 2, num_rule)
+        attn_rule = tf.nn.embedding_lookup(self.attn_rule_embed, self.query_rels_flatten)
+        self.attn_rule = tf.nn.softmax(attn_rule, axis=2) # shape: (flatten_batch_size, 2, num_rule)
 
         # We calculate the probability we arrive at different reference nodes from shallow rule scores.
         #    self.random_walk_ind: the index of rule for each ref event
         #           shape:(num_ref_events, 2, num_rules) [2 channels: we distinguish the nodes as last or first events]
-        #    res shape: (dummy_batch_size, )
+        #    res shape: (flatten_batch_size, )
         refNode_probs = [tf.reduce_sum(self.random_walk_ind[:, i, :] * self.attn_rule[:, i, :], axis=1, keep_dims=False) for i in range(2)]
         
         # We obtain the state vector enhancement by assigning the probability to certain index of the state vector.
@@ -370,8 +344,7 @@ class Learner(object):
     def _build_comp_graph(self):
         '''
         Define forward process. Use both RNN and shallow layers.
-        Please look at the Neural-LP paper (Yang, 2017) for more details and explanations.
-
+        Please look at the Neural-LP paper (Yang et al., 2017) for more details and explanations of the RNN structure.
         '''
         num_entity, num_sample = self._build_variables()
         
@@ -430,20 +403,27 @@ class Learner(object):
                     self.state_vec_recorded.append(tf.identity(state_vec))
                     
                     # We use a weighted sum of dist from difference cases.
-                    query_time_dist = self.attn_refType[idx_event_pos][:, 0:1] * self.probs[:, 2*idx_event_pos, :] + \
-                                      self.attn_refType[idx_event_pos][:, 1:2] * self.probs[:, 2*idx_event_pos+1, :]
-                    
+                    if self.flag_int:
+                        query_time_dist = self.attn_refType[idx_event_pos][:, 0:1] * self.probs[:, 2*idx_event_pos, :] + \
+                                          self.attn_refType[idx_event_pos][:, 1:2] * self.probs[:, 2*idx_event_pos+1, :]
+                    else:
+                        query_time_dist = self.probs[:, idx_event_pos, :]
+
                     # For the last step, we use the state vector to predict the query time.
                     # For last event, we start from tail entity and should come back to the tail entity.
                     # For first event, we start from head entity and should come back to the head entity.
                     self.pred.append(self._time_prediction(state_vec, query_time_dist, self.targets[idx_event_pos]))
            
         # We merge the results from last and first events to get the final prediction.
-        self.final_pred = [self.attn_refType[2][:, 0:1] * self.pred[0] + self.attn_refType[2][:, 1:2] * self.pred[1]]
+        if self.flag_int:
+            self.final_pred = [self.attn_refType[2][:, 0:1] * self.pred[0] + self.attn_refType[2][:, 1:2] * self.pred[1]]
+        else:
+            self.final_pred = [self.attn_refType[0][:, 0:1] * self.pred[0] + self.attn_refType[0][:, 1:2] * self.pred[1]]
+
 
         # scaling the final prob to make the learning more stable.
         if self.prob_scaling_factor is not None:
-            self.final_pred[0] = self._final_prob_scalling(self.final_pred[0])
+            self.final_pred[0] = self._scale_final_prob(self.final_pred[0])
 
         # calculate the loss
         self.final_loss = self._calculate_loss(self.final_pred[0])
@@ -466,7 +446,7 @@ class Learner(object):
            
             if self.prob_scaling_factor is not None:
                 # scaling the loss to make the learning more stable.
-                self.final_pred[1] = self._final_prob_scalling(self.final_pred[1])
+                self.final_pred[1] = self._scale_final_prob(self.final_pred[1])
             
             self.final_loss += self._calculate_loss(self.final_pred[1])
             self.final_loss *= 0.5
@@ -479,58 +459,66 @@ class Learner(object):
         '''
         Use shallow layers only to accelerate the training process.
         '''
-        self.query_rel_dummy = tf.placeholder(tf.int32, [None])   # (dummy_batch_size) num_relevant_events in a batch
-        self.refNode_source = tf.placeholder(tf.float32, [None, None])  # show where the refNode comes from (batch_size, dummy_batch_size)
+        self.query_rel_flatten = tf.placeholder(tf.int32, [None])   # (flatten_batch_size) num_relevant_events in a batch
+        self.refNode_source = tf.placeholder(tf.float32, [None, None])  # show where the refNode comes from (batch_size, flatten_batch_size)
         
         if self.flag_ruleLen_split:
             # Todo: ruleLen_split_ver
             pass
         else:
-            num_cases = 8 if self.flag_int else 2   # [tqs, tqe] X [last_event, first_event] X [ts, te]
-            self.random_walk_prob = tf.placeholder(tf.float32, [None, num_cases, self.num_rule])  # (dummy_batch_size, num_cases, num_rule)
-            self.random_walk_ind = tf.placeholder(tf.float32, [None, 2, self.num_rule])  # (dummy_batch_size, 2, num_rule)
+            num_cases_probs = 8 if self.flag_int else 2   # [tqs, tqe] X [last_event, first_event] X [ts, te] or [last_event, first_event]
+            self.random_walk_prob = tf.placeholder(tf.float32, [None, num_cases_probs, self.num_rule])  # (flatten_batch_size, num_cases, num_rule)
+            self.random_walk_ind = tf.placeholder(tf.float32, [None, 2, self.num_rule])  # (flatten_batch_size, 2, num_rule)
 
 
         # attention vec for different rules given the query relation
         self.attn_rule_embed = tf.Variable(np.random.randn(self.num_query, self.num_rule), dtype=tf.float32, name="attn_rule_embed")
-        attn_rule = tf.nn.embedding_lookup(self.attn_rule_embed, self.query_rel_dummy)
+        attn_rule = tf.nn.embedding_lookup(self.attn_rule_embed, self.query_rel_flatten)
         attn_rule = tf.nn.softmax(attn_rule, axis=1)
-        self.attn_rule = attn_rule  # shape: (dummy_batch_size, num_rule)
+        self.attn_rule = attn_rule  # shape: (flatten_batch_size, num_rule)
         
         # attention vec for different positions: first or last event, using ts or te
-        # [tqs, tqe] X [(first_event_ts, first_event_te), (last_event_ts, last_event_te), (first_event, last_event)]
+        # [tqs, tqe] X [(first_event_ts, first_event_te), (last_event_ts, last_event_te), (first_event, last_event)] or [first_event, last_event]
+        num_cases_refType = 6 if self.flag_int else 1
         self.attn_refType_embed = [tf.Variable(self._random_uniform_unit(self.num_query, 2), dtype=tf.float32, name='attn_refType_embed_{}'.format(i)) 
-                                   for i in range(3 * (int(self.flag_int) + 1))]
-        attn_refType = [tf.nn.embedding_lookup(embed, self.query_rel_dummy) for embed in self.attn_refType_embed]
-        attn_refType = [tf.nn.softmax(x, axis=1) for x in attn_refType] # each element (dummy_batch_size, 2)
+                                   for i in range(num_cases_refType)]
+        attn_refType = [tf.nn.embedding_lookup(embed, self.query_rel_flatten) for embed in self.attn_refType_embed]
+        attn_refType = [tf.nn.softmax(x, axis=1) for x in attn_refType] # each element (flatten_batch_size, 2)
         self.attn_refType = attn_refType
     
         if self.flag_ruleLen_split:
             pass    
         else:
             # prob we arrive at different reference events
-            refNode_attn = [tf.reduce_sum(self.random_walk_prob[:, i, :] * attn_rule, axis=1, keep_dims=True) for i in range(num_cases)]  # shape: (dummy_batch_size, 1)
-            refNode_attn_norm = [tf.reduce_sum(self.random_walk_ind[:, i, :] * attn_rule, axis=1, keep_dims=True) for i in range(2)]  # shape: (dummy_batch_size, 1)
+            refNode_attn = [tf.reduce_sum(self.random_walk_prob[:, i, :] * attn_rule, axis=1, keep_dims=True) for i in range(num_cases_probs)]  # shape: (flatten_batch_size, 1)
+            refNode_attn_norm = [tf.reduce_sum(self.random_walk_ind[:, i, :] * attn_rule, axis=1, keep_dims=True) for i in range(2)]  # shape: (flatten_batch_size, 1)
             
             self.final_pred = []
-            for i in range(int(self.flag_int)+1):
-                # attn_refType[3*i+2]: choose first or last event; 
-                # attn_refType[3*i][:, 0:1]: choose ts or te for the first event;
-                # attn_refType[3*i][:, 1:2]: choose ts or te for the last event.
-                probs = attn_refType[3*i+2][:, 0:1] * (attn_refType[3*i][:, 0:1]   * refNode_attn[4*i]   + attn_refType[3*i][:, 1:2]   * refNode_attn[4*i+1]) + \
-                        attn_refType[3*i+2][:, 1:2] * (attn_refType[3*i+1][:, 0:1] * refNode_attn[4*i+2] + attn_refType[3*i+1][:, 1:2] * refNode_attn[4*i+3])  
+            for i in range(2):
+                if (not self.flag_int) and (i>0):
+                    break
 
-                norm = attn_refType[3*i+2][:, 0:1] * (attn_refType[3*i][:, 0:1]   * refNode_attn_norm[0] + attn_refType[3*i][:, 1:2]   * refNode_attn_norm[0]) + \
-                       attn_refType[3*i+2][:, 1:2] * (attn_refType[3*i+1][:, 0:1] * refNode_attn_norm[1] + attn_refType[3*i+1][:, 1:2] * refNode_attn_norm[1])  
+                if self.flag_int:
+                    # attn_refType[3*i+2]: choose first or last event; 
+                    # attn_refType[3*i][:, 0:1]: choose ts or te for the first event;
+                    # attn_refType[3*i][:, 1:2]: choose ts or te for the last event.
+                    probs = attn_refType[3*i+2][:, 0:1] * (attn_refType[3*i][:, 0:1]   * refNode_attn[4*i]   + attn_refType[3*i][:, 1:2]   * refNode_attn[4*i+1]) + \
+                            attn_refType[3*i+2][:, 1:2] * (attn_refType[3*i+1][:, 0:1] * refNode_attn[4*i+2] + attn_refType[3*i+1][:, 1:2] * refNode_attn[4*i+3])  
 
-                # refNode_source: shape: (batch_size, dummy_batch_size), prob: shape: (dummy_batch_size, num_timestamp)
+                    norm = attn_refType[3*i+2][:, 0:1] * (attn_refType[3*i][:, 0:1]   * refNode_attn_norm[0] + attn_refType[3*i][:, 1:2]   * refNode_attn_norm[0]) + \
+                           attn_refType[3*i+2][:, 1:2] * (attn_refType[3*i+1][:, 0:1] * refNode_attn_norm[1] + attn_refType[3*i+1][:, 1:2] * refNode_attn_norm[1])  
+                else:
+                    probs = attn_refType[0][:, 0:1] * refNode_attn[0] + attn_refType[0][:, 1:2] * refNode_attn[1]
+                    norm =  attn_refType[0][:, 0:1] * refNode_attn_norm[0] + attn_refType[0][:, 1:2] * refNode_attn_norm[1]
+
+                # refNode_source: shape: (batch_size, flatten_batch_size), prob: shape: (flatten_batch_size, num_timestamp)
                 self.final_pred.append(tf.matmul(self.refNode_source, probs) / (tf.matmul(self.refNode_source, norm)) + 1e-20)
 
 
         # scaling the prob to make the learning more stable.
         if self.prob_scaling_factor is not None:
             for i in range(int(self.flag_int)+1):
-                self.final_pred[i] = self._final_prob_scalling(self.final_pred[i])
+                self.final_pred[i] = self._scale_final_prob(self.final_pred[i])
 
 
         # calculate the loss
@@ -563,19 +551,19 @@ class Learner(object):
 
         if self.flag_state_vec_enhance:
             # Similar to fast version, we use shallow layers to enhance the state vector.
-            query_rels_dummy, res_random_walk, refNode_index = inputs_for_enhancement
+            query_rels_flatten, res_random_walk, refNode_index = inputs_for_enhancement
             
             # Create random_walk_ind from res_random_walk.
             # We only need to distinguish the cases for first or last event.
             # There is an inverse mapping since in the random walk use 0 for first event and 1 for last event.
             # In RNN model, we first calculate the last event and then the first event.
-            random_walk_ind = np.zeros((len(query_rels_dummy), 2, self.num_rule))  
+            random_walk_ind = np.zeros((len(query_rels_flatten), 2, self.num_rule))  
             for i, j in zip([0, -1], [1, 0]):
                 if len(res_random_walk[i]) > 0:
                     x, y = res_random_walk[i][:, 0].astype(int), res_random_walk[i][:, 1].astype(int)
                     random_walk_ind[x, j, y] = 1
             
-            feed[self.query_rels_dummy] = query_rels_dummy
+            feed[self.query_rels_flatten] = query_rels_flatten
             feed[self.refNode_index] = refNode_index
             feed[self.random_walk_ind] = random_walk_ind
 
@@ -585,14 +573,14 @@ class Learner(object):
         return graph_output
 
 
-    def _run_comp_graph_fast_ver(self, sess, query_rel_dummy, refNode_source, probs, to_fetch):
+    def _run_comp_graph_fast_ver(self, sess, query_rel_flatten, refNode_source, probs, to_fetch):
         feed = {}
-        feed[self.query_rel_dummy] = query_rel_dummy
+        feed[self.query_rel_flatten] = query_rel_flatten
         feed[self.refNode_source] = refNode_source
 
         num_cases = 8 if self.flag_int else 2
-        random_walk_prob = np.zeros((len(query_rel_dummy), num_cases, self.num_rule)) 
-        random_walk_ind = np.zeros((len(query_rel_dummy), 2, self.num_rule))  # We only need to distinguish the cases for first or last event.
+        random_walk_prob = np.zeros((len(query_rel_flatten), num_cases, self.num_rule)) 
+        random_walk_ind = np.zeros((len(query_rel_flatten), 2, self.num_rule))  # We only need to distinguish the cases for first or last event.
         for i in range(num_cases):
             if len(probs[i]) > 0:
                 x, y, p = probs[i][:, 0].astype(int), probs[i][:, 1].astype(int), probs[i][:, 2]
@@ -614,7 +602,7 @@ class Learner(object):
         return probs.tolist()
 
 
-    def _create_dummy_probs_for_prediction(self, probs):
+    def _create_flatten_probs_for_prediction(self, probs):
         return [prob[0] for prob in probs]
 
 
@@ -716,17 +704,16 @@ class Learner(object):
         connectivity_TR = {idx_TR: ([[0,0]], [0.], [num_entity, num_entity]) for idx_TR in range(self.num_TR)}        
         probs = [[[0 for _ in range(num_entity)] for _ in range(num_cases)] for _ in range(batch_size)]
 
-
         inputs_for_enhancement = []
         if self.flag_state_vec_enhance:
-            query_rels_dummy = list(range(self.num_query))
+            query_rels_flatten = list(range(self.num_query))
 
             # They do not affect the scores of rules. 
             res_random_walk = [np.array([[0 for _ in range(3)] for _ in range(batch_size)]) for _ in range(num_cases)]
             refNode_index = [[0, 0] for _ in range(batch_size)]
             
             # collect the inputs for enhancement
-            inputs_for_enhancement = [query_rels_dummy, res_random_walk, refNode_index]
+            inputs_for_enhancement = [query_rels_flatten, res_random_walk, refNode_index]
 
         fetched = self._run_comp_graph(sess, qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, inputs_for_enhancement, to_fetch)
 
