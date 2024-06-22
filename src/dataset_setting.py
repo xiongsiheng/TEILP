@@ -32,15 +32,15 @@ def obtain_inv_edges(edges, num_rel):
     return edges
 
 
-def obtain_dataset(dataset_name1, num_rel):
-    train_edges = read_dataset_txt('../data/' + dataset_name1 + '/train.txt')
+def obtain_dataset(dataset_name, num_rel):
+    train_edges = read_dataset_txt('../data/' + dataset_name + '/train.txt')
     train_edges = obtain_inv_edges(train_edges, num_rel)
 
-    valid_data = read_dataset_txt('../data/' + dataset_name1 + '/valid.txt')
+    valid_data = read_dataset_txt('../data/' + dataset_name + '/valid.txt')
     valid_data = np.array(valid_data)
     valid_data_inv = np.hstack([valid_data[:, 2:3], valid_data[:, 1:2] + num_rel//2, valid_data[:, 0:1], valid_data[:, 3:]])
 
-    test_data = read_dataset_txt('../data/' + dataset_name1 + '/test.txt')
+    test_data = read_dataset_txt('../data/' + dataset_name + '/test.txt')
     test_data = np.array(test_data)
     test_data_inv = np.hstack([test_data[:, 2:3], test_data[:, 1:2] + num_rel//2, test_data[:, 0:1], test_data[:, 3:]])
 

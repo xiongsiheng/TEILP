@@ -38,19 +38,6 @@ class Experiment():
         self.idx_ls_dict = {"Train": self.data['train_idx_ls'], "Valid": self.data['valid_idx_ls'], "Test": self.data['test_idx_ls']}
 
 
-    def _find_middle_point(self, array):
-        # Find the length of the array
-        length = len(array)
-
-        # Calculate the middle index
-        middle_index = length // 2
-
-        # Get the middle point
-        middle_point = array[middle_index]
-
-        return middle_point
-
-
     def _calculate_output(self, myTEKG, run_fn, batch_idx_ls, mode, stage, flag_rm_seen_ts, useful_data):
         '''
         Calculate the output of the model for a batch of data.
@@ -118,6 +105,19 @@ class Experiment():
                 preds = self._adjust_preds_based_on_dur(preds, qq, pred_dur_dict, batch_idx_ls)
         
         return output, preds, gts
+
+
+    def _find_middle_point(self, array):
+        # Find the length of the array
+        length = len(array)
+
+        # Calculate the middle index
+        middle_index = length // 2
+
+        # Get the middle point
+        middle_point = array[middle_index]
+
+        return middle_point
 
 
     def _get_prediction(self, prob_t, timestamp_range, useful_data, flag_rm_seen_ts):
@@ -211,7 +211,7 @@ class Experiment():
             
             if mode in ['Valid', 'Test'] and not self.option.flag_acceleration:
                 # Find the corresponding batch index in the saved file.
-                save_path = '../output/{}/{}_final_state_vec_batch_{}.json'.format(self.data['dataset_name'], mode, all_batch_ls.index(batch_idx_ls))
+                save_path = '../output/{}/final_state_vec/{}_batch_{}.json'.format(self.data['short_name'], mode, all_batch_ls.index(batch_idx_ls))
             
             if stage == 'time prediction':
                 # Read the saved final state vectors and attention scores.
@@ -257,7 +257,7 @@ class Experiment():
         assert stage in ['obtain state vec', 'time prediction', None]  # We only use stage during inference.
 
         flag_rm_seen_ts = False # remove seen ts in training set
-        if self.data['dataset_name'] in ['icews14', 'icews05-15', 'gdelt'] and not self.option.shift:
+        if self.data['short_name'] in ['icews14', 'icews05-15', 'gdelt'] and not self.option.shift:
             flag_rm_seen_ts = True
 
         # Create the model based on the option. 
@@ -280,7 +280,8 @@ class Experiment():
         if total_idx is None:
             # Randomly sample the training data if the option is choosen.
             processor = Data_Processor()
-            total_idx = processor._trainig_data_sampling(self.data['train_nodes'], self.data['train_idx_ls'], self.data['num_rel'], num_sample_per_rel=self.option.num_samples_per_rel)
+            total_idx = processor._trainig_data_sampling(self.data['train_nodes'], self.data['train_idx_ls'], self.data['num_rel'], 
+                                                         num_sample_per_rel=self.option.num_samples_per_rel)
             random.shuffle(total_idx)
 
         loss = self.one_epoch(total_idx, "Train", None)
@@ -341,8 +342,8 @@ class Experiment():
         rule_scores, refType_scores = self.learner.get_rule_scores_fast_ver(self.sess)
         path_suffix = '' if not self.option.shift else '_time_shifting'
 
-        if not os.path.exists('../output/' + self.option.dataset):
-            os.mkdir('../output/' + self.option.dataset)
+        if not os.path.exists('../output/' + self.option.dataset + '/rule_scores'):
+            os.mkdir('../output/' + self.option.dataset + '/rule_scores')
 
         for rel in range(self.data['num_rel']):
             output = {}
@@ -359,6 +360,9 @@ class Experiment():
 
 
     def save_state_vectors(self, mode, total_idx):
+        save_path = '../output/{}/final_state_vec'.format(self.data['short_name'])
+        if not os.path.exists(save_path):
+            os.mkdir(save_path)
         self.one_epoch(mode, total_idx=total_idx, stage='obtain state vec')
 
 

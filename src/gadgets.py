@@ -30,13 +30,13 @@ class Data_Processor():
         '''
         dataset_index = ['wiki', 'YAGO', 'icews14', 'icews05-15', 'gdelt100'].index(option.dataset)
 
-        data['path'] = '../output/{}/walk_res'.format(option.dataset) if not option.shift else '../output/{}/walk_res_time_shift'.format(option.dataset)
+        data['walk_res_path'] = '../output/{}/walk_res'.format(option.dataset) if not option.shift else '../output/{}/walk_res_time_shift'.format(option.dataset)
         
         data['dataset'] = ['WIKIDATA12k', 'YAGO11k', 'icews14', 'icews05-15', 'gdelt100'][dataset_index]
         if option.shift:
             data['dataset'] = 'difficult_settings/{}_time_shifting'.format(data['dataset'])
 
-        data['dataset_name'] = ['wiki', 'YAGO', 'icews14', 'icews05-15', 'gdelt100'][dataset_index]
+        data['short_name'] = ['wiki', 'YAGO', 'icews14', 'icews05-15', 'gdelt100'][dataset_index]
 
         data['num_rel'] = [48, 20, 460, 502, 40][dataset_index]
         data['num_TR'] = 4
@@ -113,7 +113,7 @@ class Data_Processor():
         # Adjust train_idx_ls according to random walk results.
         data['train_idx_ls'] = []
         for idx in range(data['num_samples_dist'][0]):
-            output_path = "{}/{}_idx_{}.json".format(data['path'], option.dataset, idx)
+            output_path = "{}/{}_idx_{}.json".format(data['walk_res_path'], option.dataset, idx)
             if os.path.exists(output_path):  
                 data['train_idx_ls'].append(idx)
 
@@ -126,10 +126,10 @@ class Data_Processor():
             data['test_idx_ls'] = [idx + np.sum(data['num_samples_dist']) for idx in data['test_idx_ls']]
 
         if option.dataset in ['wiki', 'YAGO']:
-            with open('../data/{}_time_pred_eval_rm_idx.json'.format(data['dataset_name']), 'r') as file:
+            with open('../data/{}_time_pred_eval_rm_idx.json'.format(data['short_name']), 'r') as file:
                 data['rm_ls'] = json.load(file)
             if option.shift:
-                with open('../data/{}_time_pred_eval_rm_idx_shift_mode.json'.format(data['dataset_name']), 'r') as file:
+                with open('../data/{}_time_pred_eval_rm_idx_shift_mode.json'.format(data['short_name']), 'r') as file:
                     data['rm_ls'] = json.load(file)
 
             # remove test samples with unknown time      
@@ -152,7 +152,7 @@ class Data_Processor():
         '''
         num_rel = data['num_rel']//2 if not option.shift else data['num_rel']  # known time range change
 
-        data['pattern_ls'], data['ts_stat_ls'], data['te_stat_ls'], data['stat_res'] = self.processing_stat_res(data['dataset_name'], num_rel, 
+        data['pattern_ls'], data['ts_stat_ls'], data['te_stat_ls'], data['stat_res'] = self.processing_stat_res(data['short_name'], num_rel, 
                                                                                                                 flag_time_shifting=option.shift,
                                                                                                                 flag_interval=option.flag_interval)
         
@@ -164,7 +164,7 @@ class Data_Processor():
 
         # Todo: use the duration information for learning
         if hasattr(option, 'flag_use_dur') and option.flag_use_dur:
-            with open("../output/{}_dur_preds.json".format(data['dataset_name']), "r") as json_file:
+            with open("../output/{}/dur_preds.json".format(data['short_name']), "r") as json_file:
                 data['pred_dur'] = json.load(json_file)
         return
     
@@ -190,7 +190,7 @@ class Data_Processor():
         self._prepare_stat_res(data, option, dataset_index)
 
         if save_option:
-            option.this_expsdir = os.path.join(option.exps_dir, '{}_{}'.format(data['dataset_name'], option.tag))
+            option.this_expsdir = os.path.join(option.exps_dir, '{}_{}'.format(data['short_name'], option.tag))
             if not os.path.exists(option.this_expsdir):
                 os.makedirs(option.this_expsdir)
             option.ckpt_dir = os.path.join(option.this_expsdir, "ckpt")
@@ -791,8 +791,8 @@ class Data_Processor():
         Returns:
             output: dict, output probabilities with reference edges
         '''
-        path = data['path']
-        dataset_name = data['dataset_name']
+        path = data['walk_res_path']
+        dataset_name = data['short_name']
         nodes = np.vstack((data['train_nodes'], data['valid_nodes'], data['test_nodes']))
         timestamp_range = data['timestamp_range']
 

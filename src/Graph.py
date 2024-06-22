@@ -13,7 +13,7 @@ class Base(object):
         self.option = option
         self.data = data
 
-        dataset_index = ['wiki', 'YAGO', 'icews14', 'icews05-15', 'gdelt100'].index(self.data['dataset_name'])
+        dataset_index = ['wiki', 'YAGO', 'icews14', 'icews05-15', 'gdelt100'].index(self.data['short_name'])
 
         # Parameters for the exponential distribution.
         # Only used in icews and gdelt datasets.
@@ -44,7 +44,7 @@ class Base(object):
             prob_dict = {}
             query_time = {}
             for data_idx in idx_ls:
-                filepath = '../output/{}/process_res/{}_idx_{}_input.json'.format(self.data['dataset_name'], self.data['dataset_name'], data_idx)
+                filepath = '../output/{}/process_res/{}_idx_{}_input.json'.format(self.data['short_name'], self.data['short_name'], data_idx)
                 if not os.path.exists(filepath):
                     continue
                 with open(filepath) as f:
@@ -55,8 +55,8 @@ class Base(object):
         else:
             # for test mode, there is no pre-processing
             preprocessor = Data_Processor()
-            output = preprocessor.prepare_inputs(nodes=self.nodes, res_path=self.data['path'], 
-                                                 dataset=self.data['dataset_name'], 
+            output = preprocessor.prepare_inputs(nodes=self.nodes, res_path=self.data['walk_res_path'], 
+                                                 dataset=self.data['short_name'], 
                                                  idx_ls=idx_ls, pattern_ls=self.data['pattern_ls'], 
                                                  timestamp_range=self.data['timestamp_range'],
                                                  ts_stat_ls=self.data['ts_stat_ls'], 
@@ -135,7 +135,7 @@ class TEKG_fast_ver(Base):
         '''
         query_edges, query_time = [], []
         for data_idx in idx_ls:
-            file_path = os.path.join(self.data['path'], "%s_idx_%s.json" % (self.data['dataset_name'], data_idx))
+            file_path = os.path.join(self.data['walk_res_path'], "%s_idx_%s.json" % (self.data['short_name'], data_idx))
             if os.path.exists(file_path):
                 with open(file_path, 'r') as file:
                     json_data = json.load(file)
@@ -486,7 +486,7 @@ class TEKG(Base):
         num_entity = None
         batch_nodes_idx = None
         for data_idx in idx_ls:
-            file_path = "{}/{}_idx_{}.json".format(self.data['path'], self.data['dataset_name'], data_idx)
+            file_path = "{}/{}_idx_{}.json".format(self.data['walk_res_path'], self.data['short_name'], data_idx)
             if not os.path.exists(file_path):
                 continue
             with open(file_path, 'r') as f:
