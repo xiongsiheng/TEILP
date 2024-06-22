@@ -98,7 +98,7 @@ else:
 
 # Prepare the parameters for the walker.
 paras = [num_rel, num_pattern, num_ruleLen, dataset_using, f_interval]
-targ_rel_ls = range(num_rel)
+targ_rel_ls = range(num_rel//2)
 if imbalanced_rel is not None:
     targ_rel_ls = [imbalanced_rel]
 if targ_rel is not None:

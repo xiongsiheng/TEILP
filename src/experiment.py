@@ -49,9 +49,9 @@ class Experiment():
         
         if self.option.flag_acceleration:
             # Variables used by the fast-ver model:
-            #       query_rel_flatten: [] * flatten_batch_size (num_nodes);  
-            #       refNode_source: [(flatten_batch_size,)] * batch_size;
-            #       probs: (num_rules_in_total_for_different_nodes, 3); [event_idx, rule_idx, prob]
+            #     query_rel_flatten: [] * flatten_batch_size (num_nodes);  
+            #     refNode_source: [(flatten_batch_size,)] * batch_size;
+            #     probs: (num_rules_in_total_for_different_nodes, 3); [event_idx, rule_idx, prob]
             qq, query_rel_flatten, refNode_source, probs, _, valid_sample_idx, \
                             query_time, query_samples, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode)
         else:
@@ -215,8 +215,9 @@ class Experiment():
             
             if stage == 'time prediction':
                 # Read the saved final state vectors and attention scores.
-                final_state_vec, attn_refType, batch_idx_ls = self._load_saved_final_state(save_path)
-            
+                final_state_vec, attn_refType, batch_idx_ls_read = self._load_saved_final_state(save_path)
+                batch_idx_ls = batch_idx_ls_read if batch_idx_ls_read is not None else batch_idx_ls
+
             useful_data = [train_nodes, timestamp_range, pred_dur_dict, final_state_vec, attn_refType]
 
             output, preds, gts = self._calculate_output(model, run_fn, batch_idx_ls, mode, stage, flag_rm_seen_ts, useful_data)
@@ -280,7 +281,7 @@ class Experiment():
         if total_idx is None:
             # Randomly sample the training data if the option is choosen.
             processor = Data_Processor()
-            total_idx = processor._trainig_data_sampling(self.data['train_nodes'], self.data['train_idx_ls'], self.data['num_rel'], 
+            total_idx = processor._trainig_data_sampling(self.data['train_nodes'], self.data['train_idx_ls'], self.data['num_query'], 
                                                          num_sample_per_rel=self.option.num_samples_per_rel)
             random.shuffle(total_idx)
 
@@ -345,13 +346,13 @@ class Experiment():
         if not os.path.exists('../output/' + self.option.dataset + '/rule_scores'):
             os.mkdir('../output/' + self.option.dataset + '/rule_scores')
 
-        for rel in range(self.data['num_rel']):
+        for rel in range(self.data['num_query']):
             output = {}
             output['rule_scores'] = rule_scores[rel, :].tolist()
             output['refType_scores'] = [scores[rel, :].tolist() for scores in refType_scores]
         
             cur_path = '../output/' + self.option.dataset + '/rule_scores/' + self.option.dataset + path_suffix
-            # if self.option.shift and rel >= self.data['num_rel']//2:
+            # if self.option.shift and rel >= self.data['num_query']:
             #     cur_path += 'fix_ref_time_'
             cur_path += '_rel_' + str(rel) + '.json'
                     
@@ -363,7 +364,7 @@ class Experiment():
         save_path = '../output/{}/final_state_vec'.format(self.data['short_name'])
         if not os.path.exists(save_path):
             os.mkdir(save_path)
-        self.one_epoch(mode, total_idx=total_idx, stage='obtain state vec')
+        self.one_epoch(total_idx, mode, 'obtain state vec')
 
 
     def close_log_file(self):

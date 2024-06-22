@@ -120,13 +120,18 @@ def prepare_data():
 
     all_samples = np.vstack([train_samples, valid_samples, test_samples, train_samples_inv, valid_samples_inv, test_samples_inv])
 
-    pos_examples_idx = list(range(num_train)) + list(range(num_total, num_total + num_train))
+    # Difference from link prediction (s, r, ?, t) or (?, r, o, t), there is only one type of query (s, r, o, ?).
+    # Since we augment the graph with inv events, it does not matter whether we start from the original or inv events.   
+    pos_examples_idx = list(range(num_train))
+    # pos_examples_idx += list(range(num_total, num_total + num_train))
     pos_examples_idx = np.array(pos_examples_idx)
 
-    valid_idx_ls = list(range(num_train, num_train + num_valid)) + list(range(num_total + num_train, num_total + num_train + num_valid))
+    valid_idx_ls = list(range(num_train, num_train + num_valid))
+    # valid_idx_ls += list(range(num_total + num_train, num_total + num_train + num_valid))
     valid_idx_ls = np.array(valid_idx_ls)
 
-    test_idx_ls = list(range(num_train + num_valid, num_total)) + list(range(num_total + num_train + num_valid, num_total * 2))
+    test_idx_ls = list(range(num_train + num_valid, num_total))
+    # test_idx_ls += list(range(num_total + num_train + num_valid, num_total * 2))
     test_idx_ls = np.array(test_idx_ls)
 
     return all_samples, pos_examples_idx, valid_idx_ls, test_idx_ls
@@ -295,7 +300,7 @@ def create_stat_res_path():
 
 
 stat_res_path = create_stat_res_path()
-targ_rel_ls = list(range(num_rel_aug))
+targ_rel_ls = list(range(num_rel))
 
 
 if 'rule_summarization' in steps_to_do:

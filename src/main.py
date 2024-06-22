@@ -74,8 +74,8 @@ def main():
     option.dropout = 0.
     option.max_epoch = 30 if option.flag_acceleration else 10
     option.min_epoch = 5
-    option.create_log = False
     option.batch_size = 8 if option.flag_acceleration else 4
+    option.create_log = False
 
     os.environ["CUDA_VISIBLE_DEVICES"] = option.gpu
     tf.logging.set_verbosity(tf.logging.ERROR)
@@ -144,7 +144,8 @@ def main():
             idx_ls = []
             for batch_idx in batch_idx_ls:
                 idx_ls.append(list(itertools.chain(*[batch_ls[i] for i in batch_idx])))
-               
+
+ 
         outputs = Parallel(n_jobs=num_batches)(
                 delayed(experiment.test)(idx_batch) for idx_batch in idx_ls
                 )

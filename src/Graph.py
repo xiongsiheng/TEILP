@@ -801,7 +801,14 @@ class TEKG(Base):
                     if data_idx in query_time_dict:
                         query_time[i] = query_time_dict[data_idx].tolist()
 
-   
+
+        if stage == 'time prediction':
+            final_state_vec, attn_refType = extra_data
+            # We do not have the final state vec and attn_refType for the current batch.
+            if final_state_vec is None or attn_refType is None:
+                return None, None, None, None, None, None, [], None, None, query_time, None, []
+
+
         # For probs and valid_refNode_idx, we use a composite index here to simplify the coding.
         # idx_complete = 4*idx_query_time + 2*(1-idx_event_pos) + idx_ref_time
         #           or = 1-idx_event_pos

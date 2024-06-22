@@ -38,6 +38,7 @@ class Data_Processor():
 
         data['short_name'] = ['wiki', 'YAGO', 'icews14', 'icews05-15', 'gdelt100'][dataset_index]
 
+        data['num_query'] = [24, 10, 230, 251, 20][dataset_index]
         data['num_rel'] = [48, 20, 460, 502, 40][dataset_index]
         data['num_TR'] = 4
          
@@ -150,9 +151,9 @@ class Data_Processor():
         Returns:
             None
         '''
-        num_rel = data['num_rel']//2 if not option.shift else data['num_rel']  # known time range change
+        num_query = data['num_query'] if not option.shift else data['num_query'] * 2 # known time range change
 
-        data['pattern_ls'], data['ts_stat_ls'], data['te_stat_ls'], data['stat_res'] = self.processing_stat_res(data['short_name'], num_rel, 
+        data['pattern_ls'], data['ts_stat_ls'], data['te_stat_ls'], data['stat_res'] = self.processing_stat_res(data['short_name'], num_query, 
                                                                                                                 flag_time_shifting=option.shift,
                                                                                                                 flag_interval=option.flag_interval)
         

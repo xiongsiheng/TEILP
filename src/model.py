@@ -19,7 +19,7 @@ class Learner(object):
         self.num_TR = data['num_TR']
         self.num_rule = option.num_rule
         self.num_timestamp = len(data['timestamp_range'])
-        self.num_query = data['num_rel']
+        self.num_query = data['num_query']
         self.query_embed_size = option.query_embed_size
         
 
@@ -36,7 +36,7 @@ class Learner(object):
         # To make the learning more stable, we scale the final prob dynamically.
         # If the prob is greater than self.prob_scaling_factor[0], we scale it by self.prob_scaling_factor[1].
         self.prob_scaling_factor = [0.1, 0.5]
-
+ 
         np.random.seed(self.seed)
 
         if option.flag_ruleLen_split_ver:
