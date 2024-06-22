@@ -36,43 +36,37 @@ Get into the dir
 cd src
 ```
 
-#### For (interval-based) datasets: wiki, YAGO
-
 Random walk:
 ```sh
-python main_random_walk_for_interval_datasets.py --dataset {$dataset name}
+# For wiki, YAGO:
+python random_walk_for_interval_datasets.py --dataset {$dataset name}
+
+# For icews14, icews05-15, gdelt100:
+python random_walk_for_timestamp_datasets.py --dataset {$dataset name}
+
+# Examples:
+# python random_walk_for_interval_datasets.py --dataset wiki
+# python random_walk_for_timestamp_datasets.py --dataset icews14
 ```
 
 Rule learning:
 ```sh
-python main_rule_learning_interval_dataset.py --dataset {$dataset name} --train
+python main.py --dataset {$dataset name} --train
+
+# Examples:
+# python main.py --dataset YAGO --train
+# python main.py --dataset icews14 --train
 ```
 
 Rule application:
 ```sh
-python main_rule_learning_interval_dataset.py --dataset {$dataset name} --test --from_model_ckpt {$path to saved model}
+python main.py --dataset {$dataset name} --test --from_model_ckpt {$path to saved model}
 
-# For example,
-# python main_rule_learning_interval_dataset.py --dataset YAGO --test --from_model_ckpt ../exps/YAGO_24-02-17-20-57/ckpt/model-20
+# Examples:
+# python main.py --dataset YAGO --test --from_model_ckpt ../exps/YAGO_24-02-17-20-57/ckpt/model-30
+# python main.py --dataset icews14 --test --from_model_ckpt ../exps/icews14_24-02-18-11-03/ckpt/model-30
 ```
 
-#### For (timestamp-based) datasets: icews14, icews05-15, gdelt100
-
-Random walk:
-```sh
-python main_random_walk_for_timestamp_datasets.py --dataset {$dataset name}
-```
-
-Rule learning:
-```sh
-python main_rule_learning_timestamp_dataset.py --dataset {$dataset name} --train
-```
-
-Rule application:
-```sh
-python main_rule_application_timestamp_dataset.py --dataset {$dataset name}
-python main_rule_learning_timestamp_dataset.py --dataset {$dataset name} --test --from_model_ckpt {$path to saved model}
-```
 
 ## Contact
 If you have any inquiries, please feel free to raise an issue or reach out to sxiong45@gatech.edu.
