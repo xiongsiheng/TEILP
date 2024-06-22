@@ -34,7 +34,7 @@ def main():
     
     # We consider only using the shallow layers to accelerate the training and inference.
     # Set flag_acceleration to False to use the RNN structure.
-    option.flag_acceleration = False
+    option.flag_acceleration = True
     
     # Use different scores for different lengths of rules. Found not necessary.
     option.flag_ruleLen_split_ver = False
@@ -85,7 +85,7 @@ def main():
     # After that, we can set it to False to skip this step.
     # We only do preprocessing for training data.
     processor = Data_Processor()
-    data = processor.prepare_data(option, preprocess_walk_res=False)
+    data = processor.prepare_data(option, preprocess_walk_res=True)
     
 
     # Build the model.

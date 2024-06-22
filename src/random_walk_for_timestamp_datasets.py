@@ -27,7 +27,7 @@ flag_time_shifting = parsed["shift"]
 # Random walk is to do random walk with training data and save the results.
 # Rule summarization is to convert the walks into rules and save the results.
 # Rule application is to apply the rules on validataion data and test data and save the results
-steps_to_do = ['random_walk', 'rule_summarization', 'rule_application'][2:]
+steps_to_do = ['random_walk', 'rule_summarization', 'rule_application']
 
 
 
