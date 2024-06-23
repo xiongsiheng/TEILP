@@ -22,19 +22,6 @@ def str_tuple(e):
     return str(tuple(e))
 
 
-def list_subtract(ls1, ls2):
-    # Repeat the last element of the shorter list until their lengths are equal
-    len1, len2 = len(ls1), len(ls2)
-    if len1 < len2:
-        ls1 += [ls1[-1]] * (len2 - len1)
-    elif len2 < len1:
-        ls2 += [ls2[-1]] * (len1 - len2)
-
-    # Subtract corresponding elements of ls2 from ls1
-    result = [ls1[i] - ls2[i] for i in range(len(ls1))]
-    return result
-
-
 def shuffle_data(data, seed=None):
     if seed is not None:
         np.random.seed(seed)
@@ -53,6 +40,7 @@ def interval_intersection(interval1, interval2):
     else:
         return min(b, d)-max(a, c)
 
+
 def interval_union(interval1, interval2):
     a, b = interval1
     c, d = interval2
@@ -60,6 +48,7 @@ def interval_union(interval1, interval2):
         return b-a + d-c
     else:
         return max(b, d) - min(a, c)
+
 
 def interval_convex(interval1, interval2):
     a, b = interval1
@@ -120,13 +109,11 @@ def read_dataset_txt(path):
     return edges
 
 
-
 def merge_list(ls_ls):
     output = []
     for ls in ls_ls:
         output += ls
     return output
-
 
 
 def split_list_into_batches(lst, batch_size=None, num_batches=None):
@@ -144,9 +131,6 @@ def split_list_into_batches(lst, batch_size=None, num_batches=None):
         return output
     
     return [lst[i:i + batch_size] for i in range(0, len(lst), batch_size)]
-
-
-
 
 
 def obtain_walk_file_ls(path, dataset, idx_ls=None,  ratio=None, imbalanced_rel=None,  flag_biased=0, exp_idx=None):
@@ -359,23 +343,6 @@ def cut_vector(vector, num):
     return sub_vectors
 
 
-def rm_seen_timestamp(probs_ls, timestamp_range, ref_time, tmp=None):
-    output = []
-    for probs in probs_ls:
-        # probs_cp = probs.copy()
-        probs[timestamp_range < ref_time] = 0
-        # if np.sum(probs) == 0:
-        #     print(probs_cp)
-        #     print(timestamp_range, ref_time)
-        #     print(tmp)
-        #     print('------------------------')
-        # if np.sum(probs) == 0:
-        #     probs[timestamp_range >= ref_time] = 1
-        # probs = probs / np.sum(probs)
-        output.append(probs)
-    return output
-
-
 def generate_exp_dist(weight, scale, offset, timestamp_range, ref_time):
     dist = np.zeros((len(timestamp_range), ))
     time_gap = timestamp_range - ref_time
@@ -396,7 +363,6 @@ def rule_num_stat(data):
                 res[cur_rel][rule] = 0
             res[cur_rel][rule] += 1
     return res
-
 
 
 def stat_para_estimation(data):
@@ -435,8 +401,6 @@ def stat_para_estimation(data):
             mu = data[0, i]
             mu_ls[i] = mu
 
-
-
     return mu_ls, std_ls, loc_ls, lamda_ls
 
 
@@ -445,7 +409,6 @@ def merge_ls(ls1):
     for l in ls1:
         res += l
     return [[x] for x in res]
-
 
 
 def exponential(x, lamb, offset):
@@ -503,7 +466,6 @@ def fit_data(data):
         return 'exponential', popt_exp
     else:
         return 'reflected exponential', popt_neg_exp
-
 
 
 def stat_para_estimation_v2(data, dist_type=None):

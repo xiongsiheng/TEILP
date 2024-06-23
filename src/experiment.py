@@ -38,75 +38,6 @@ class Experiment():
         self.idx_ls_dict = {"Train": self.data['train_idx_ls'], "Valid": self.data['valid_idx_ls'], "Test": self.data['test_idx_ls']}
 
 
-    def _calculate_output(self, myTEKG, run_fn, batch_idx_ls, mode, stage, flag_rm_seen_ts, useful_data):
-        '''
-        Calculate the output of the model for a batch of data.
-        There are three modes: 'Train', 'Valid', 'Test'.
-        For validation and testing, we have two stages: 'obtain state vec' and 'time prediction'.
-        '''
-        train_nodes, timestamp_range, pred_dur_dict, final_state_vec, attn_refType = useful_data
-        extra_data = [final_state_vec, attn_refType] if stage == 'time prediction' else None
-        
-        if self.option.flag_acceleration:
-            # Variables used by the fast-ver model:
-            #     query_rel_flatten: [] * flatten_batch_size (num_nodes);  
-            #     refNode_source: [(flatten_batch_size,)] * batch_size;
-            #     probs: (num_rules_in_total_for_different_nodes, 3); [event_idx, rule_idx, prob]
-            qq, query_rel_flatten, refNode_source, probs, _, valid_sample_idx, \
-                            query_time, query_samples, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode)
-        else:
-            qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, valid_refNode_idx, inputs_for_enhancement, query_time,\
-                    query_samples, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode, stage, extra_data)
-
-        gts = np.array(query_time)
-        
-        # We first random guess the time.
-        preds = [[1900, 2000] for _ in range(len(batch_idx_ls))]  if self.option.dataset in ['wiki', 'YAGO'] else \
-                [[self._find_middle_point(self.data['timestamp_range'])] for _ in range(len(batch_idx_ls))]
-        preds = np.array(preds)
-        
-        if mode == "Train":
-            if len(valid_sample_idx) == 0:
-                # all samples are invalid (no walk can be found)
-                return [], [], []
-
-            inputs = [query_rel_flatten, refNode_source, probs] if self.option.flag_acceleration else \
-                     [qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, inputs_for_enhancement]        
-            output = run_fn(self.sess, inputs)
-
-            # # For debugging only.
-            # if np.isnan(output).any():
-            #     print("Nan in the output")
-            #     print(batch_idx_ls, output)
-            #     sys.exit(0)
-        else:
-            # For inference, there might be different stages.
-            if stage == 'obtain state vec':
-                if len(valid_sample_idx) == 0:
-                    # all samples are invalid (no walk can be found)
-                    return {}, [], []
-          
-                inputs = [qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, inputs_for_enhancement, valid_refNode_idx, batch_idx_ls]
-                output = run_fn(self.sess, inputs)
-                output['batch_idx'] = batch_idx_ls
-            else:
-                useful_data = [valid_sample_idx, query_samples, train_nodes]
-                output = final_preds
-
-                # Obtain the predictions from the output.
-                # final_preds: [(bacth_size, num_timestamp)] * (1 + int(flag_int))
-                for (i, prob_t) in enumerate(output):
-                    if len(valid_sample_idx) > 0:
-                        prob_t = prob_t.reshape(-1)   # prob_t: (batch_size, num_timestamp)
-                        prob_t = np.array(split_list_into_batches(prob_t, batch_size=len(timestamp_range)))
-
-                        preds[valid_sample_idx, i] = self._get_prediction(prob_t, timestamp_range, useful_data, flag_rm_seen_ts)
-                    
-                preds = self._adjust_preds_based_on_dur(preds, qq, pred_dur_dict, batch_idx_ls)
-        
-        return output, preds, gts
-
-
     def _find_middle_point(self, array):
         # Find the length of the array
         length = len(array)
@@ -170,6 +101,84 @@ class Experiment():
             preds[mask] = np.hstack((avg_time, avg_time))
 
         return preds
+    
+
+    def _obtain_gt_and_pred(self, output, batch_idx_ls, query_time, mode, stage, useful_data, qq, pred_dur_dict, valid_sample_idx, timestamp_range, flag_rm_seen_ts):
+        '''
+        Obtain the ground truth and predictions for the time prediction.
+        '''
+        gts = np.array(query_time)
+        
+        # We first random guess the time.
+        preds = [[1900, 2000] for _ in range(len(batch_idx_ls))]  if self.option.dataset in ['wiki', 'YAGO'] else \
+                [[self._find_middle_point(self.data['timestamp_range'])] for _ in range(len(batch_idx_ls))]
+        preds = np.array(preds)
+        
+        if mode != "Train" and stage == 'time prediction':
+            # Obtain the predictions from the output.
+            # final_preds: [(bacth_size, num_timestamp)] * (1 + int(flag_int))
+            for (i, prob_t) in enumerate(output):
+                if len(valid_sample_idx) > 0:
+                    prob_t = prob_t.reshape(-1)   # prob_t: (batch_size, num_timestamp)
+                    prob_t = np.array(split_list_into_batches(prob_t, batch_size=len(timestamp_range)))
+
+                    preds[valid_sample_idx, i] = self._get_prediction(prob_t, timestamp_range, useful_data, flag_rm_seen_ts)
+                
+            preds = self._adjust_preds_based_on_dur(preds, qq, pred_dur_dict, batch_idx_ls)
+        return gts, preds
+
+
+    def _calculate_output(self, myTEKG, run_fn, batch_idx_ls, mode, stage, flag_rm_seen_ts, useful_data):
+        '''
+        Calculate the output of the model for a batch of data.
+        There are three modes: 'Train', 'Valid', 'Test'.
+        For validation and testing, we have two stages: 'obtain state vec' and 'time prediction'.
+        '''
+        train_nodes, timestamp_range, pred_dur_dict, final_state_vec, attn_refType = useful_data
+        extra_data = [final_state_vec, attn_refType] if stage == 'time prediction' else None
+        
+        if self.option.flag_acceleration:
+            # Variables used by the fast-ver model:
+            #     query_rel_flatten: [] * flatten_batch_size (num_nodes);  
+            #     refNode_source: [(flatten_batch_size,)] * batch_size;
+            #     probs: (num_rules_in_total_for_different_nodes, 3); [event_idx, rule_idx, prob]
+            qq, query_rel_flatten, refNode_source, probs, _, valid_sample_idx, \
+                            query_time, query_samples, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode)
+        else:
+            qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, valid_refNode_idx, inputs_for_enhancement, query_time,\
+                    query_samples, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode, stage, extra_data)
+     
+        if mode == "Train":
+            if len(valid_sample_idx) == 0:
+                # all samples are invalid (no walk can be found)
+                return [], [], []
+
+            inputs = [query_rel_flatten, refNode_source, probs] if self.option.flag_acceleration else \
+                     [qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, inputs_for_enhancement]        
+            output = run_fn(self.sess, inputs)
+
+            # # For debugging only.
+            # if np.isnan(output).any():
+            #     print("Nan in the output")
+            #     print(batch_idx_ls, output)
+            #     sys.exit(0)
+        else:
+            # For inference, there might be different stages.
+            if stage == 'obtain state vec':
+                if len(valid_sample_idx) == 0:
+                    # all samples are invalid (no walk can be found)
+                    return {}, [], []
+          
+                inputs = [qq, hh, tt, connectivity_rel, connectivity_TR, probs, valid_sample_idx, inputs_for_enhancement, valid_refNode_idx, batch_idx_ls]
+                output = run_fn(self.sess, inputs)
+                output['batch_idx'] = batch_idx_ls
+            else:
+                useful_data = [valid_sample_idx, query_samples, train_nodes]
+                output = final_preds
+
+        preds, gts = self._obtain_gt_and_pred(output, batch_idx_ls, query_time, mode, stage, useful_data, qq, pred_dur_dict, 
+                                              valid_sample_idx, timestamp_range, flag_rm_seen_ts)
+        return output, preds, gts
 
 
     def _load_saved_final_state(self, save_path):
