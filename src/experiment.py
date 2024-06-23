@@ -114,7 +114,7 @@ class Experiment():
                 [[self._find_middle_point(self.data['timestamp_range'])] for _ in range(len(batch_idx_ls))]
         preds = np.array(preds)
         
-        if mode != "Train" and stage == 'time prediction':
+        if mode != "Train" and stage != 'obtain state vec':
             # Obtain the predictions from the output.
             # final_preds: [(bacth_size, num_timestamp)] * (1 + int(flag_int))
             for (i, prob_t) in enumerate(output):
@@ -125,6 +125,7 @@ class Experiment():
                     preds[valid_sample_idx, i] = self._get_prediction(prob_t, timestamp_range, useful_data, flag_rm_seen_ts)
                 
             preds = self._adjust_preds_based_on_dur(preds, qq, pred_dur_dict, batch_idx_ls)
+ 
         return gts, preds
 
 
@@ -176,7 +177,7 @@ class Experiment():
                 useful_data = [valid_sample_idx, query_samples, train_nodes]
                 output = final_preds
 
-        preds, gts = self._obtain_gt_and_pred(output, batch_idx_ls, query_time, mode, stage, useful_data, qq, pred_dur_dict, 
+        gts, preds = self._obtain_gt_and_pred(output, batch_idx_ls, query_time, mode, stage, useful_data, qq, pred_dur_dict, 
                                               valid_sample_idx, timestamp_range, flag_rm_seen_ts)
         return output, preds, gts
 
