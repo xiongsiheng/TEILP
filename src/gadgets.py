@@ -8,9 +8,7 @@ from collections import Counter
 from utlis import *
 
 
-
-
-class Data_Processor(object):
+class Data_initializer(object):
     def _prepare_basic_info(self, data, option):
         '''
         Prepare basic information for the dataset.
@@ -42,35 +40,6 @@ class Data_Processor(object):
          
         return dataset_index
     
-
-    def _trainig_data_sampling(self, train_edges, pos_examples_idx, num_rel, num_sample_per_rel=-1):
-        '''
-        Sample training data for efficiency.
-
-        Parameters:
-            train_edges: np.array, training data
-            pos_examples_idx: list, indices of the positive examples
-            num_rel: int, number of relations
-            num_sample_per_rel: int, number of samples per relation (-1 means no sampling)
-
-        Returns:
-            pos_examples_idx_sample: list, indices of the sampled positive examples
-        '''
-        if num_sample_per_rel > 0:
-            pos_examples_idx_sample = []
-            pos_examples = train_edges[pos_examples_idx]
-            pos_examples_idx = np.array(pos_examples_idx)
-            
-            for rel_idx in range(num_rel):
-                sample_idx_cur_rel = pos_examples_idx[pos_examples[:, 1] == rel_idx]
-                np.random.shuffle(sample_idx_cur_rel)
-                pos_examples_idx_sample.append(sample_idx_cur_rel[:num_sample_per_rel])
-
-            pos_examples_idx_sample = np.hstack(pos_examples_idx_sample).tolist()
-            return pos_examples_idx_sample
-
-        return pos_examples_idx
-
 
     def _prepare_gdelt_shift_data(self, data):
         '''
@@ -168,52 +137,6 @@ class Data_Processor(object):
         return
     
 
-    def prepare_data(self, option, save_option=True, preprocess_walk_res=True):
-        '''
-        Prepare the data for the experiment.
-        
-        Parameters:
-            option: Option, store the experiment settings
-            save_option: bool, whether to save the option
-            preprocess_walk_res: bool, whether to preprocess the random walk results to obtain query time probabilities
-                                 This is only done for training data.
-
-        Returns:
-            data: dict, store the data information
-        '''
-        data = {}
-        dataset_index = self._prepare_basic_info(data, option)
-        option.flag_interval = True if dataset_index in [0, 1] else False
-
-        self._prepare_nodes(data, option, dataset_index)
-        self._prepare_stat_res(data, option, dataset_index)
-
-        if save_option:
-            option.this_expsdir = os.path.join(option.exps_dir, '{}_{}'.format(data['short_name'], option.tag))
-            if not os.path.exists(option.this_expsdir):
-                os.makedirs(option.this_expsdir)
-            option.ckpt_dir = os.path.join(option.this_expsdir, "ckpt")
-            if not os.path.exists(option.ckpt_dir):
-                os.makedirs(option.ckpt_dir)
-            option.model_path = os.path.join(option.ckpt_dir, "model")
-
-            option.num_step = [4, 6, 4, 4, 4][dataset_index]
-            option.num_rule = [1000, 1000, 1000, 1000, 1000][dataset_index]  # for each relation
-            
-            option.savetxt = '{}/intermediate_res.txt'.format(option.this_expsdir)
-            option.save()
-            print("Option saved.")
-
-
-        data['random_walk_res'] = None
-        if option.train and preprocess_walk_res:
-            # Once this step is done, we recommend to save the results without rewriting unless the settings are changed.
-            self.prepare_random_walk_res(option, data, 'Train', num_workers=20, show_tqdm=True, rewriting=True, flag_interval=option.flag_interval)
-            print("Data prepared.")
-
-        return data
-
-
     def obtain_all_data(self, dataset, shuffle_train_set=True, use_validation=True):
         '''
         Obtain the training, validation, and test data for the dataset.
@@ -302,98 +225,87 @@ class Data_Processor(object):
 
                     ts_stat_ls[rel].append(cur_ts_stat_ls)
     
-        return pattern_ls, ts_stat_ls, te_stat_ls, stat_res
+        return pattern_ls, ts_stat_ls, te_stat_ls, stat_res    
 
 
-    def _update_stat_res(self, walk, stat_res, samples_edges, mode, TR_ls, flag_interval):
+    def prepare_data(self, option, save_option=True, preprocess_walk_res=True):
         '''
-        Given a walk, update the statistics results for the rule that the walk follows.
-
-        Parameters:
-            walk: dict, walk results
-            stat_res: dict, statistics results
-            samples_edges: dict, samples of edges
-            mode: str, mode
-            TR_ls: str, TR_ls
-            flag_interval: bool, whether to use interval
-
-        Returns:
-            None
-        '''
-        e = [walk['entities'][0], walk["relations"][0], walk['entities'][1], walk['ts'][0]]
-        if flag_interval:
-            e.append(walk['te'][0])
+        Prepare the data for the experiment.
         
-        rule_pattern = '{} {}'.format(' '.join([str(cur_rel) for cur_rel in walk["relations"][1:]]), TR_ls)
-        cur_ref_edge = [[walk['entities'][1], walk["relations"][1], walk['entities'][2], walk['ts'][1]], 
-                        [walk['entities'][-2], walk["relations"][-1], walk['entities'][-1], walk['ts'][-1]]]
-
-        if rule_pattern not in stat_res:
-            stat_res[rule_pattern] = []
-
-        if mode == 'Train':
-            if flag_interval:
-                cur_time_gap = list_subtract(walk['ts'][0:1], walk['ts'][-1:]) + list_subtract(walk['te'][0:1], walk['ts'][-1:])
-            else:
-                cur_time_gap = list_subtract(walk['ts'][0:1], walk['ts'][1:2]) + list_subtract(walk['ts'][0:1], walk['ts'][-1:])
-            stat_res[rule_pattern].append(cur_time_gap)
-
-        e = str(tuple(e))
-        if e not in samples_edges:
-            samples_edges[e] = {}
-        if rule_pattern not in samples_edges[e]:
-            samples_edges[e][rule_pattern] = []
-
-        samples_edges[e][rule_pattern].append(cur_ref_edge)
-
-
-    def _find_relation_specific_data(self, file_paths, rel):
-        '''
-        Given the file paths, find the relation-specific data.
-
         Parameters:
-            file_paths: list, file paths
-            rel: int, relation
+            option: Option, store the experiment settings
+            save_option: bool, whether to save the option
+            preprocess_walk_res: bool, whether to preprocess the random walk results to obtain query time probabilities
+                                 This is only done for training data.
 
         Returns:
-            data: dict, relation-specific data
+            data: dict, store the data information
         '''
         data = {}
-        for file_path in file_paths:
-            if not '_rel_{}'.format(str(rel)) in file_path:
-                continue
-            with open(file_path) as f:
-                data.update(json.load(f))
+        dataset_index = self._prepare_basic_info(data, option)
+        option.flag_interval = True if dataset_index in [0, 1] else False
+
+        self._prepare_nodes(data, option, dataset_index)
+        self._prepare_stat_res(data, option, dataset_index)
+
+        if save_option:
+            option.this_expsdir = os.path.join(option.exps_dir, '{}_{}'.format(data['short_name'], option.tag))
+            if not os.path.exists(option.this_expsdir):
+                os.makedirs(option.this_expsdir)
+            option.ckpt_dir = os.path.join(option.this_expsdir, "ckpt")
+            if not os.path.exists(option.ckpt_dir):
+                os.makedirs(option.ckpt_dir)
+            option.model_path = os.path.join(option.ckpt_dir, "model")
+
+            option.num_step = [4, 6, 4, 4, 4][dataset_index]
+            option.num_rule = [1000, 1000, 1000, 1000, 1000][dataset_index]  # for each relation
+            
+            option.savetxt = '{}/intermediate_res.txt'.format(option.this_expsdir)
+            option.save()
+            print("Option saved.")
+
+        data['random_walk_res'] = None
+        if option.train and preprocess_walk_res:
+            # Once this step is done, we recommend to save the results without rewriting unless the settings are changed.
+            processor = Data_Processor()
+            processor.prepare_random_walk_res(option, data, 'Train', num_workers=20, show_tqdm=True, rewriting=True, flag_interval=option.flag_interval)
+        
+        print("Data prepared.")
+
         return data
 
 
-    def _format_stat_res(self, stat_res, rule_pattern, flag_plot):
+
+class Data_Processor(object):
+    def _trainig_data_sampling(self, train_edges, pos_examples_idx, num_rel, num_sample_per_rel=-1):
         '''
-        Formatting the statistics results for the rule pattern.
+        Sample training data for efficiency.
 
         Parameters:
-            stat_res: dict, statistics results
-            rule_pattern: str, rule pattern
-            flag_plot: bool, whether to plot the results
+            train_edges: np.array, training data
+            pos_examples_idx: list, indices of the positive examples
+            num_rel: int, number of relations
+            num_sample_per_rel: int, number of samples per relation (-1 means no sampling)
 
         Returns:
-            None
+            pos_examples_idx_sample: list, indices of the sampled positive examples
         '''
-        res = np.vstack(stat_res[rule_pattern]).astype(float)
-        stat_res[rule_pattern] = {'ts_first_event':{}, 'ts_last_event':{}}
+        if num_sample_per_rel > 0:
+            pos_examples_idx_sample = []
+            pos_examples = train_edges[pos_examples_idx]
+            pos_examples_idx = np.array(pos_examples_idx)
+            
+            for rel_idx in range(num_rel):
+                sample_idx_cur_rel = pos_examples_idx[pos_examples[:, 1] == rel_idx]
+                np.random.shuffle(sample_idx_cur_rel)
+                pos_examples_idx_sample.append(sample_idx_cur_rel[:num_sample_per_rel])
 
-        mean_ls, std_ls, prop_ls = adaptive_Gaussian_dist_estimate_new_ver(res[:, 0])
-        stat_res[rule_pattern]['ts_first_event'] = {'mean_ls': mean_ls, 'std_ls': std_ls, 'prop_ls': prop_ls}
-        mean_ls, std_ls, prop_ls = adaptive_Gaussian_dist_estimate_new_ver(res[:, 1])
-        stat_res[rule_pattern]['ts_last_event'] = {'mean_ls': mean_ls, 'std_ls': std_ls, 'prop_ls': prop_ls}
+            pos_examples_idx_sample = np.hstack(pos_examples_idx_sample).tolist()
+            return pos_examples_idx_sample
 
-        if flag_plot:
-            for rule_length in [1,2,3,4,5]:
-                plot_freq_hist(res[:, 0], 10, 'fig/len{}/{}'.format(str(rule_length), '_'.join([rule_pattern, 'ts'])))
-                plot_freq_hist(res[:, 1], 10, 'fig/len{}/{}'.format(str(rule_length), '_'.join([rule_pattern, 'te'])))
-        return
+        return pos_examples_idx
 
-   
+
     def _calculate_time_prob_dist(self, edge, timestamp_range, targ_interval, stat_ls, idx_ls, mode, flag_time_shift=False, probs_normalization=True, flag_interval=True):
         '''
         Calculate the probability distribution of the time gap.
@@ -561,6 +473,74 @@ class Data_Processor(object):
         return probs
 
 
+    def process_TEILP_results(self, res_dict, capture_dur_only=False, selected_rel=None, known_edges=None, flag_interval=True):
+        '''
+        Read the results of the TEILP model and extract the relevant information.
+
+        Parameters:
+            res_dict: dict, results
+            capture_dur_only: bool, whether to capture duration only
+            selected_rel: int, selected relation
+            known_edges: np.array, known edges
+
+        Returns:
+            output: dict, output probabilities with reference edges
+        '''
+        
+        targ_rel = res_dict['query'][1]
+        targ_time = res_dict['query'][3:]
+        notation_invalid = 9999
+        output = {}
+        if selected_rel is not None and targ_rel != selected_rel:
+            return output
+
+        output[targ_rel] = {}
+        for rlen in [k for k in res_dict.keys() if k != 'query']:
+            for walk in res_dict[rlen]:
+                if known_edges is not None:
+                    # mask the time of the edges that are not in the known_edges
+                    for i in range(int(rlen)):
+                        if flag_interval:
+                            if [walk[4*i:4*i+5][num] for num in [0,1,4,2,3]] not in known_edges.tolist():
+                                walk[4*i+2:4*i+4] = [9999, 9999]
+                        else:
+                            if [walk[3*i:3*i+4][num] for num in [0,1,3,2]] not in known_edges.tolist():
+                                walk[3*i+2:3*i+3] = 9999
+
+                # collect the information of the walk
+                rel_ls = [str(walk[4*i+1]) for i in range(int(rlen))] if flag_interval else [str(walk[3*i+1]) for i in range(int(rlen))]
+                time_ls = [[9999, 9999]] + [walk[4*i+2:4*i+4] for i in range(int(rlen))] if flag_interval else [[9999]] + [walk[3*i+2:3*i+3] for i in range(int(rlen))]
+                TR_ls = [calculate_TR(time_ls[i], time_ls[i+1]) for i in range(int(rlen))]
+                edge_ls = [walk[4*i:4*i+5] for i in range(int(rlen))] if flag_interval else [walk[3*i:3*i+4] for i in range(int(rlen))]
+                
+                rPattern = ' '.join(rel_ls + TR_ls)
+                if rPattern not in output[targ_rel]:
+                    output[targ_rel][rPattern] = {}
+                    if capture_dur_only:
+                        output[targ_rel][rPattern]['dur_with_ref'] = []
+                    else:                
+                        output[targ_rel][rPattern].update({'time_gap':[], 'edge_ls':[]})
+
+                if capture_dur_only:
+                    dur_with_ref = [cal_timegap(targ_time[1], targ_time[0]), time_ls[1], time_ls[-1]]
+                    output[targ_rel][rPattern]['dur_with_ref'].append(dur_with_ref)
+                else:
+                    if flag_interval:                
+                        time_gap = [cal_timegap(targ_time[0], time_ls[1][0], notation_invalid), cal_timegap(targ_time[0], time_ls[-1][0], notation_invalid),
+                                    cal_timegap(targ_time[0], time_ls[1][1], notation_invalid), cal_timegap(targ_time[0], time_ls[-1][1], notation_invalid),
+                                    cal_timegap(targ_time[1], time_ls[1][0], notation_invalid), cal_timegap(targ_time[1], time_ls[-1][0], notation_invalid),
+                                    cal_timegap(targ_time[1], time_ls[1][1], notation_invalid), cal_timegap(targ_time[1], time_ls[-1][1], notation_invalid)]
+                    else:
+                        time_gap = [cal_timegap(targ_time[0], time_ls[1][0], notation_invalid), cal_timegap(targ_time[0], time_ls[-1][0], notation_invalid)]
+                    output[targ_rel][rPattern]['time_gap'].append(time_gap)
+                    output[targ_rel][rPattern]['edge_ls'].append(edge_ls)
+
+
+        if selected_rel is not None:
+            output = output[selected_rel]
+        return output
+
+
     def prepare_inputs(self, res_path, dataset, nodes, idx_ls, targ_rel, pattern_ls, timestamp_range, 
                        ts_stat_ls, te_stat_ls, mode=None, flag_time_shift=False, write_to_file=False, show_tqdm=False,
                        flag_rule_split=False, rewriting=False, probs_normalization=True, flag_interval=True):            
@@ -724,8 +704,6 @@ class Data_Processor(object):
 
 
 
-
-
 class Option(object):
     def __init__(self, d):
         self.__dict__ = d
@@ -777,7 +755,7 @@ class OnlineStatsVector:
 
 
 
-class Rule_summarizer(object):
+class Rule_summarizer(Data_Processor):
     def convert_walks_into_rules(self, path, dataset, idx_ls=None, flag_time_shift=False, 
                                 flag_capture_dur_only=False, rel=None, known_edges=None, flag_few_training=False,
                                 ratio=None, imbalanced_rel=None, flag_biased=False, exp_idx=None, targ_rel_ls=None,
@@ -799,74 +777,6 @@ class Rule_summarizer(object):
                                                         for rel_batch in rel_batch_ls)
         
         return
-
-
-    def process_TEILP_results(self, res_dict, capture_dur_only=False, selected_rel=None, known_edges=None, flag_interval=True):
-        '''
-        Read the results of the TEILP model and extract the relevant information.
-
-        Parameters:
-            res_dict: dict, results
-            capture_dur_only: bool, whether to capture duration only
-            selected_rel: int, selected relation
-            known_edges: np.array, known edges
-
-        Returns:
-            output: dict, output probabilities with reference edges
-        '''
-        
-        targ_rel = res_dict['query'][1]
-        targ_time = res_dict['query'][3:]
-        notation_invalid = 9999
-        output = {}
-        if selected_rel is not None and targ_rel != selected_rel:
-            return output
-
-        output[targ_rel] = {}
-        for rlen in [k for k in res_dict.keys() if k != 'query']:
-            for walk in res_dict[rlen]:
-                if known_edges is not None:
-                    # mask the time of the edges that are not in the known_edges
-                    for i in range(int(rlen)):
-                        if flag_interval:
-                            if [walk[4*i:4*i+5][num] for num in [0,1,4,2,3]] not in known_edges.tolist():
-                                walk[4*i+2:4*i+4] = [9999, 9999]
-                        else:
-                            if [walk[3*i:3*i+4][num] for num in [0,1,3,2]] not in known_edges.tolist():
-                                walk[3*i+2:3*i+3] = 9999
-
-                # collect the information of the walk
-                rel_ls = [str(walk[4*i+1]) for i in range(int(rlen))] if flag_interval else [str(walk[3*i+1]) for i in range(int(rlen))]
-                time_ls = [[9999, 9999]] + [walk[4*i+2:4*i+4] for i in range(int(rlen))] if flag_interval else [[9999]] + [walk[3*i+2:3*i+3] for i in range(int(rlen))]
-                TR_ls = [calculate_TR(time_ls[i], time_ls[i+1]) for i in range(int(rlen))]
-                edge_ls = [walk[4*i:4*i+5] for i in range(int(rlen))] if flag_interval else [walk[3*i:3*i+4] for i in range(int(rlen))]
-                
-                rPattern = ' '.join(rel_ls + TR_ls)
-                if rPattern not in output[targ_rel]:
-                    output[targ_rel][rPattern] = {}
-                    if capture_dur_only:
-                        output[targ_rel][rPattern]['dur_with_ref'] = []
-                    else:                
-                        output[targ_rel][rPattern].update({'time_gap':[], 'edge_ls':[]})
-
-                if capture_dur_only:
-                    dur_with_ref = [cal_timegap(targ_time[1], targ_time[0]), time_ls[1], time_ls[-1]]
-                    output[targ_rel][rPattern]['dur_with_ref'].append(dur_with_ref)
-                else:
-                    if flag_interval:                
-                        time_gap = [cal_timegap(targ_time[0], time_ls[1][0], notation_invalid), cal_timegap(targ_time[0], time_ls[-1][0], notation_invalid),
-                                    cal_timegap(targ_time[0], time_ls[1][1], notation_invalid), cal_timegap(targ_time[0], time_ls[-1][1], notation_invalid),
-                                    cal_timegap(targ_time[1], time_ls[1][0], notation_invalid), cal_timegap(targ_time[1], time_ls[-1][0], notation_invalid),
-                                    cal_timegap(targ_time[1], time_ls[1][1], notation_invalid), cal_timegap(targ_time[1], time_ls[-1][1], notation_invalid)]
-                    else:
-                        time_gap = [cal_timegap(targ_time[0], time_ls[1][0], notation_invalid), cal_timegap(targ_time[0], time_ls[-1][0], notation_invalid)]
-                    output[targ_rel][rPattern]['time_gap'].append(time_gap)
-                    output[targ_rel][rPattern]['edge_ls'].append(edge_ls)
-
-
-        if selected_rel is not None:
-            output = output[selected_rel]
-        return output
 
 
     def process_TEILP_results_in_batch(self, path, file_ls, flag_capture_dur_only, rel_batch, known_edges, stat_res_path, flag_interval=True, num_rules_preserved=1000):

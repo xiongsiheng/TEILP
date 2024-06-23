@@ -54,17 +54,17 @@ class Base(object):
                 prob_dict[data_idx] = data[1]    
         else:
             # for test mode, there is no pre-processing
-            preprocessor = Data_Processor()
-            output = preprocessor.prepare_inputs(nodes=self.nodes, res_path=self.data['walk_res_path'], 
-                                                 dataset=self.data['short_name'], 
-                                                 idx_ls=idx_ls, pattern_ls=self.data['pattern_ls'], 
-                                                 timestamp_range=self.data['timestamp_range'],
-                                                 ts_stat_ls=self.data['ts_stat_ls'], 
-                                                 te_stat_ls=self.data['te_stat_ls'],
-                                                 targ_rel=None, mode=mode,
-                                                 flag_time_shift=self.option.shift, 
-                                                 show_tqdm=False, probs_normalization=True,
-                                                 flag_interval=self.option.flag_interval)
+            processor = Data_Processor()
+            output = processor.prepare_inputs(nodes=self.nodes, res_path=self.data['walk_res_path'], 
+                                                dataset=self.data['short_name'], 
+                                                idx_ls=idx_ls, pattern_ls=self.data['pattern_ls'], 
+                                                timestamp_range=self.data['timestamp_range'],
+                                                ts_stat_ls=self.data['ts_stat_ls'], 
+                                                te_stat_ls=self.data['te_stat_ls'],
+                                                targ_rel=None, mode=mode,
+                                                flag_time_shift=self.option.shift, 
+                                                show_tqdm=False, probs_normalization=True,
+                                                flag_interval=self.option.flag_interval)
             query_time, prob_dict = output[0], output[1]
 
         return prob_dict, query_time

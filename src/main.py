@@ -84,8 +84,8 @@ def main():
     # For the first time, set preprocess_walk_res=True to preprocess and save the probabilities of query time.
     # After that, we can set it to False to skip this step.
     # We only do preprocessing for training data.
-    processor = Data_Processor()
-    data = processor.prepare_data(option, preprocess_walk_res=True)
+    data_initializer = Data_initializer()
+    data = data_initializer.prepare_data(option, preprocess_walk_res=True)
     
 
     # Build the model.
