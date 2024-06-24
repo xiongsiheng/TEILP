@@ -67,6 +67,14 @@ python main.py --dataset {$dataset name} --test --from_model_ckpt {$path to save
 # python main.py --dataset icews14 --test --from_model_ckpt ../exps/icews14_24-02-18-11-03/ckpt/model-30
 ```
 
+Print rules:
+```sh
+# Find the rules and scores in output/{$dataset name}/rule_scores.
+# Parameters:
+# - rule_patterns: relations and temporal relations (Example in YAGO: query rel: 4, rule: 7 10 7 10 14 ukn af bf af bf; Translation: isMarriedTo(x, y, I_q) <- diedIn(x, e1, I1) and wasBornIn^{-1}(e1, e2, I2) and diedIn(e2, e3, I3) and wasBornIn^{-1}(e3, e4, I4) and isMarriedTo^{-1}(e4, y, I5) and unknown(I_q, I_1) and after(I_1, I_2) and before(I_2, I_3) and after(I_3, I_4) and before(I_4, I_5) and unknown(I_5, I_q))
+# - rule_scores: score of the rules
+# - refType_scores: score of reference types shared by all the rules (use which event in the body and its start time or end time)
+```
 
 ## Contact
 If you have any inquiries, please feel free to raise an issue or reach out to sxiong45@gatech.edu.
