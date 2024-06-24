@@ -360,6 +360,7 @@ class Experiment():
             output = {}
             output['rule_scores'] = rule_scores[rel, :].tolist()
             output['refType_scores'] = [scores[rel, :].tolist() for scores in refType_scores]
+            output['rule_patterns'] = self.data['pattern_ls'][rel]
         
             cur_path = '../output/' + self.option.dataset + '/rule_scores/' + self.option.dataset + path_suffix
             # if self.option.shift and rel >= self.data['num_query']:
