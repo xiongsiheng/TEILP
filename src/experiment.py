@@ -140,9 +140,9 @@ class Experiment():
         
         if self.option.flag_acceleration:
             # Variables used by the fast-ver model:
-            #     query_rel_flatten: [] * flatten_batch_size (num_nodes);  
-            #     refNode_source: [(flatten_batch_size,)] * batch_size;
-            #     probs: (num_rules_in_total_for_different_nodes, 3); [event_idx, rule_idx, prob]
+            #     query_rel_flatten: List[int] (length: flatten_batch_size (num_nodes)); 
+            #     refNode_source: List[NDArray(np.int32)] (shape: (flatten_batch_size, ), length: batch_size);
+            #     probs: NDArray(np.float64) (shape: (num_rules_in_total_for_different_nodes, 3), meaning: [event_idx, rule_idx, prob])
             qq, query_rel_flatten, refNode_source, probs, _, valid_sample_idx, \
                             query_time, query_samples, final_preds = myTEKG.graph.create_graph(batch_idx_ls, mode)
         else:
