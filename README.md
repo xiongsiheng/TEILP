@@ -1,5 +1,5 @@
-## [AAAI 24 (oral)] TEILP: Time Prediction over Knowledge Graphs via Logical Reasoning
-This repository contains the code for the paper [TEILP: Time Prediction over Knowledge Graphs via Logical Reasoning](https://arxiv.org/pdf/2312.15816.pdf).
+## TEILP: Time Prediction over Knowledge Graphs via Logical Reasoning
+This repository contains the code for the paper [AAAI 24 (Oral)]  [TEILP: Time Prediction over Knowledge Graphs via Logical Reasoning](https://arxiv.org/pdf/2312.15816.pdf).
 
 <p align="center">
   <img src='https://github.com/xiongsiheng/TEILP/blob/main/misc/task.png' width=600>
